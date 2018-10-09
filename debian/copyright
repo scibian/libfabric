@@ -79,7 +79,9 @@ License: BSD-2-clause or GPL-2
  ==================================================================
 
 Files: debian/*
-Copyright: 2016 Q-Leap Networks GmbH <info@q-leap.de>
+Copyright:
+ 2016 Q-Leap Networks GmbH <info@q-leap.de>
+ 2018 Scibian Project <legal@scibian.org>
 License: GPL-2+
  This package is free software; you can redistribute it and/or modify
  it under the terms of the GNU General Public License as published by
