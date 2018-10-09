@@ -1,3 +1,10 @@
+libfabric (1.4.0-1sci9+opa10.7u1) scibian9+opa10.7; urgency=medium
+
+  * Scibianization
+  * Enable PSM2 provider on amd64
+
+ -- Rémi Palancher <remi-externe.palancher@edf.fr>  Tue, 09 Oct 2018 12:04:44 +0200
+
 libfabric (1.4.0-1) unstable; urgency=medium
 
   * New upstream release.
