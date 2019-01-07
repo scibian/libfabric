@@ -1,3 +1,9 @@
+libfabric (1.4.0-1sci9+opa10.7u3) scibian9; urgency=medium
+
+  * Patch psm2 provider initialization to support pmix There was poor communication performance when PMIX was used and 'couldn't listen to port 64256' messages were oberved when setting FI_LOG_LEVEL to debug.
+
+ -- Pierre Trespeuch <pierre-externe.trespeuch@edf.fr>  Mon, 07 Jan 2019 15:16:32 +0100
+
 libfabric (1.4.0-1sci9+opa10.7u2) scibian9+opa10.7; urgency=medium
 
   * Restrict psm2 build-dep to amd64 arch
