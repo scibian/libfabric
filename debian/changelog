@@ -1,33 +1,93 @@
-libfabric (1.4.0-1sci10+opa10.9u1) scibian10+opa10.9; urgency=medium
+libfabric (1.6.2-3) unstable; urgency=medium
 
-  * New release for scibian10
+  * Add patch to detect the presence of OmniPath adapters in the psm2
+    provider. Amongst others things, this avoids 'illegal instruction' crashes
+    on older hardware that doesn't support AVX2.
 
- -- MHamed Bouaziz <mhamed-externe.bouaziz@edf.fr>  Thu, 30 Jan 2020 14:52:21 +0100
+ -- Roland Fehrenbacher <rfehren@debian.org>  Sat, 02 Feb 2019 10:42:42 +0000
 
-libfabric (1.4.0-1sci9+opa10.9u1) scibian9+opa10.9; urgency=medium
+libfabric (1.6.2-2) unstable; urgency=medium
 
-  * New release for opa10.9
+  * New upstream release
+  * Document psm2 support in README.Debian (Closes: #906297)
 
- -- MHamed Bouaziz <mhamed-externe.bouaziz@edf.fr>  Mon, 19 Aug 2019 13:08:06 +0200
+ -- Roland Fehrenbacher <rfehren@debian.org>  Wed, 16 Jan 2019 11:35:13 +0000
 
-libfabric (1.4.0-1sci9+opa10.7u3) scibian9; urgency=medium
+libfabric (1.6.1-5) unstable; urgency=medium
 
-  * Patch psm2 provider initialization to support pmix There was poor communication performance when PMIX was used and 'couldn't listen to port 64256' messages were oberved when setting FI_LOG_LEVEL to debug.
+  * Update Breaks+Replaces on libfabric1, libfabric-dev
 
- -- Pierre Trespeuch <pierre-externe.trespeuch@edf.fr>  Mon, 07 Jan 2019 15:16:32 +0100
+ -- Roland Fehrenbacher <rf@q-leap.de>  Tue, 19 Jun 2018 09:47:34 +0000
 
-libfabric (1.4.0-1sci9+opa10.7u2) scibian9+opa10.7; urgency=medium
+libfabric (1.6.1-4) unstable; urgency=medium
 
-  * Restrict psm2 build-dep to amd64 arch
+  * Move all man pages to libfabric-dev (Closes: #891395)
 
- -- Rémi Palancher <remi-externe.palancher@edf.fr>  Tue, 09 Oct 2018 14:16:47 +0200
+ -- Roland Fehrenbacher <rfehren@debian.org>  Tue, 19 Jun 2018 08:07:35 +0000
 
-libfabric (1.4.0-1sci9+opa10.7u1) scibian9+opa10.7; urgency=medium
+libfabric (1.6.1-3) unstable; urgency=medium
 
-  * Scibianization
-  * Enable PSM2 provider on amd64
+  * libfabric-bin must Breaks+Replaces libfabric1 (<< 1.6) (Closes: #901191)
 
- -- Rémi Palancher <remi-externe.palancher@edf.fr>  Tue, 09 Oct 2018 12:04:44 +0200
+ -- Mehdi Dogguy <mehdi@debian.org>  Sun, 10 Jun 2018 11:12:48 +0200
+
+libfabric (1.6.1-2) unstable; urgency=medium
+
+  * libpsm2 is supported on amd64 only. Restrict build-depedency on
+    libpsm2-dev accordingly.
+  * Fix Vcs-Git field (spotted by lintian's vcs-field-not-canonical tag)
+  * Fix some typos in library messages
+    - add patch debian/patches/0002-Fix-typos-in-library-messages.patch
+  * Bump Standards-Version to 4.1.4, no changes required.
+
+ -- Mehdi Dogguy <mehdi@debian.org>  Sat, 09 Jun 2018 11:01:42 +0200
+
+libfabric (1.6.1-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Add package libfabric-bin
+  * Add psm2 provider
+  * Drop obsolete patches
+
+ -- Roland Fehrenbacher <rfehren@debian.org>  Wed, 30 May 2018 10:37:32 +0200
+
+libfabric (1.5.3-1) unstable; urgency=medium
+
+  [ Roland Fehrenbacher ]
+  * New upstream release.
+  * Update Maintainer field with "Debian HPC Team"
+  * Move packaging Git repo to salsa.d.o and update Vcs-{Git,Browser}
+    accordingly.
+  * Add myself to Uploaders
+  * Re-establish dep14 repository/package structure. Please read the following
+    files before contributing to this package:
+    - debian/README.source
+    - debian/gbp.conf
+
+  [ Mehdi Dogguy ]
+  * Updated repo location of fabtests in README.Debian
+  * Remove Ana Beatriz Guerrero Lopez from Uploaders and add myself.
+    Thanks Ana for all your work!
+
+ -- Mehdi Dogguy <mehdi@debian.org>  Thu, 04 Jan 2018 14:21:40 +0100
+
+libfabric (1.5.2-1) unstable; urgency=medium
+
+  * Team upload.
+  * New upstream release (Closes: #881814)
+  * Point watch file to release tarballs on GitHub
+  * Add new symbols for libfabric1 library
+  * Bump Standards-Version to 4.1.1 (no changes needed)
+  * Add patch to fix spelling errors
+  * Add patches to fix bad whatis entries and manpage errors from man
+  * Correct order of file paragraphs in copyright file and update copyright
+  * Update to debhelper 10
+  * Switch to dbgsym debug package
+  * Explicitly enable/disable libfabric providers
+  * Add static libfabric library to libfabric-dev
+  * Relax supported architectures to linux-any
+
+ -- Benjamin Drung <bdrung@debian.org>  Wed, 29 Nov 2017 16:58:45 +0100
 
 libfabric (1.4.0-1) unstable; urgency=medium
 

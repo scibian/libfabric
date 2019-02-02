@@ -1,5 +1,6 @@
 #!/usr/bin/make -f
 
+include /usr/share/dpkg/architecture.mk
 include /usr/share/dpkg/buildflags.mk
 include /usr/share/dpkg/pkg-info.mk
 
@@ -7,7 +8,7 @@ export DEB_BUILD_MAINT_OPTIONS = hardening=+all
 
 EXTRAFLAGS :=
 ifeq (amd64,$(DEB_HOST_ARCH))
-  EXTRAFLAGS := --enable-psm2=yes
+EXTRAFLAGS := --enable-psm2=yes
 endif
 
 configure_providers = \
@@ -18,17 +19,20 @@ configure_providers = \
 	--enable-mlx=no \
 	--enable-gni=no \
 	--enable-udp=yes \
-	--enable-rxm=no \
-	--enable-rxd=no \
+	--enable-rxm=yes \
+	--enable-rxd=yes \
 	--enable-bgq=no \
 	$(EXTRAFLAGS)
 
 %:
-	dh $@ --parallel --with autoreconf
+	dh $@
 
 override_dh_auto_configure:
 	dh_auto_configure -- $(configure_providers)
 
-override_dh_strip:
-	dh_strip --dbg-package=libfabric1-dbg
+override_dh_missing:
+	find debian/tmp -name libfabric.la -delete
+	dh_missing --fail-missing
 
+override_dh_strip:
+	dh_strip --dbgsym-migration='libfabric1-dbg (<< 1.5.2)'

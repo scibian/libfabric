@@ -1,37 +1,12 @@
-Format: http://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: libfabric
 Upstream-Contact: Sean Hefty <sean.hefty@intel.com>
 Source: https://github.com/ofiwg/libfabric.git
 
-
-Files: include/fasthash.h
-       src/fasthash.c
-Copyright: Copyright (C) 2012 Zilong Tan (eric.zltan@gmail.com)
-License: Expat
- Permission is hereby granted, free of charge, to any person
- obtaining a copy of this software and associated documentation
- files (the "Software"), to deal in the Software without
- restriction, including without limitation the rights to use, copy,
- modify, merge, publish, distribute, sublicense, and/or sell copies
- of the Software, and to permit persons to whom the Software is
- furnished to do so, subject to the following conditions:
- .
- The above copyright notice and this permission notice shall be
- included in all copies or substantial portions of the Software.
- .
- THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
- MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
- BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
- ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- SOFTWARE.
-
 Files: *
 Copyright:
- Copyright 2011-2016 Intel Corporation.
- Copyright 2005-2016 Cisco Systems, Inc.
+ Copyright 2011-2017 Intel Corporation.
+ Copyright 2005-2017 Cisco Systems, Inc.
  Copyright 2015-2016, Cray Inc.
  Copyright 2015-2016, Los Alamos National Security, LLC.
  Copyright 2007, Nuova Systems, Inc.
@@ -78,10 +53,34 @@ License: BSD-2-clause or GPL-2
  .
  ==================================================================
 
+Files: include/fasthash.h
+       src/fasthash.c
+Copyright: Copyright (C) 2012 Zilong Tan (eric.zltan@gmail.com)
+License: Expat
+ Permission is hereby granted, free of charge, to any person
+ obtaining a copy of this software and associated documentation
+ files (the "Software"), to deal in the Software without
+ restriction, including without limitation the rights to use, copy,
+ modify, merge, publish, distribute, sublicense, and/or sell copies
+ of the Software, and to permit persons to whom the Software is
+ furnished to do so, subject to the following conditions:
+ .
+ The above copyright notice and this permission notice shall be
+ included in all copies or substantial portions of the Software.
+ .
+ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+ NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
+ BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+ ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ SOFTWARE.
+
 Files: debian/*
-Copyright:
- 2016 Q-Leap Networks GmbH <info@q-leap.de>
- 2018 Scibian Project <legal@scibian.org>
+Copyright: 2016-2017 Q-Leap Networks GmbH <info@q-leap.de>
+           2016 Ana Guerrero López <ana@ekaia.org>
+           2017 Benjamin Drung <bdrung@debian.org>
 License: GPL-2+
  This package is free software; you can redistribute it and/or modify
  it under the terms of the GNU General Public License as published by

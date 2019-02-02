@@ -1,4 +1,1 @@
-usr/bin/*
 usr/lib/*/libfabric*.so.*
-usr/share/man/man7
-usr/share/man/man1

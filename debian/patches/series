@@ -1,1 +1,3 @@
-pmix.patch
+0001-Wrap-long-lines-in-man-pages.patch
+0002-Fix-typos-in-library-messages.patch
+0003-prov-psm2-Use-psm2_info_query-to-read-HFI-device-inf.patch

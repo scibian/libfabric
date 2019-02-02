@@ -63,8 +63,8 @@ static int fi_ibv_msg_ep_setname(fid_t ep_fid, void *addr, size_t addrlen)
 	ep = container_of(ep_fid, struct fi_ibv_msg_ep, ep_fid);
 
 	if (addrlen != ep->info->src_addrlen) {
-		FI_INFO(&fi_ibv_prov, FI_LOG_EP_CTRL,"addrlen expected: %d, got: %d.\n",
-				ep->info->src_addrlen, addrlen);
+		VERBS_INFO(FI_LOG_EP_CTRL,"addrlen expected: %zu, got: %zu.\n",
+			   ep->info->src_addrlen, addrlen);
 		return -FI_EINVAL;
 	}
 
@@ -146,16 +146,16 @@ fi_ibv_msg_ep_connect(struct fid_ep *ep, const void *addr,
 
 	src_addr = rdma_get_local_addr(_ep->id);
 	if (src_addr) {
-		FI_INFO(&fi_ibv_prov, FI_LOG_CORE, "src_addr: %s:%d\n",
-			inet_ntoa(((struct sockaddr_in *)src_addr)->sin_addr),
-			ntohs(((struct sockaddr_in *)src_addr)->sin_port));
+		VERBS_INFO(FI_LOG_CORE, "src_addr: %s:%d\n",
+			   inet_ntoa(((struct sockaddr_in *)src_addr)->sin_addr),
+			   ntohs(((struct sockaddr_in *)src_addr)->sin_port));
 	}
 
 	dst_addr = rdma_get_peer_addr(_ep->id);
 	if (dst_addr) {
-		FI_INFO(&fi_ibv_prov, FI_LOG_CORE, "dst_addr: %s:%d\n",
-			inet_ntoa(((struct sockaddr_in *)dst_addr)->sin_addr),
-			ntohs(((struct sockaddr_in *)dst_addr)->sin_port));
+		VERBS_INFO(FI_LOG_CORE, "dst_addr: %s:%d\n",
+			   inet_ntoa(((struct sockaddr_in *)dst_addr)->sin_addr),
+			   ntohs(((struct sockaddr_in *)dst_addr)->sin_port));
 	}
 
 	return rdma_connect(_ep->id, &conn_param) ? -errno : 0;
@@ -217,7 +217,7 @@ static int fi_ibv_msg_ep_shutdown(struct fid_ep *ep, uint64_t flags)
 	return rdma_disconnect(_ep->id) ? -errno : 0;
 }
 
-static struct fi_ops_cm fi_ibv_msg_ep_cm_ops = {
+struct fi_ops_cm fi_ibv_msg_ep_cm_ops = {
 	.size = sizeof(struct fi_ops_cm),
 	.setname = fi_ibv_msg_ep_setname,
 	.getname = fi_ibv_msg_ep_getname,
@@ -227,13 +227,8 @@ static struct fi_ops_cm fi_ibv_msg_ep_cm_ops = {
 	.accept = fi_ibv_msg_ep_accept,
 	.reject = fi_no_reject,
 	.shutdown = fi_ibv_msg_ep_shutdown,
+	.join = fi_no_join,
 };
-
-struct fi_ops_cm *fi_ibv_msg_ep_ops_cm(struct fi_ibv_msg_ep *ep)
-{
-	return &fi_ibv_msg_ep_cm_ops;
-}
-
 
 static int fi_ibv_pep_setname(fid_t pep_fid, void *addr, size_t addrlen)
 {
@@ -243,8 +238,8 @@ static int fi_ibv_pep_setname(fid_t pep_fid, void *addr, size_t addrlen)
 	pep = container_of(pep_fid, struct fi_ibv_pep, pep_fid);
 
 	if (pep->src_addrlen && (addrlen != pep->src_addrlen)) {
-		FI_INFO(&fi_ibv_prov, FI_LOG_FABRIC, "addrlen expected: %d, got: %d.\n",
-				pep->src_addrlen, addrlen);
+		VERBS_INFO(FI_LOG_FABRIC, "addrlen expected: %zu, got: %zu.\n",
+			   pep->src_addrlen, addrlen);
 		return -FI_EINVAL;
 	}
 
@@ -252,19 +247,22 @@ static int fi_ibv_pep_setname(fid_t pep_fid, void *addr, size_t addrlen)
 	if (pep->bound) {
 		ret = rdma_destroy_id(pep->id);
 		if (ret) {
-			FI_INFO(&fi_ibv_prov, FI_LOG_FABRIC, "Unable to destroy previous rdma_cm_id\n");
+			VERBS_INFO(FI_LOG_FABRIC,
+				   "Unable to destroy previous rdma_cm_id\n");
 			return -errno;
 		}
 		ret = rdma_create_id(NULL, &pep->id, &pep->pep_fid.fid, RDMA_PS_TCP);
 		if (ret) {
-			FI_INFO(&fi_ibv_prov, FI_LOG_FABRIC, "Unable to create rdma_cm_id\n");
+			VERBS_INFO(FI_LOG_FABRIC,
+				   "Unable to create rdma_cm_id\n");
 			return -errno;
 		}
 	}
 
 	ret = rdma_bind_addr(pep->id, (struct sockaddr *)addr);
 	if (ret) {
-		FI_INFO(&fi_ibv_prov, FI_LOG_FABRIC, "Unable to bind address to rdma_cm_id\n");
+		VERBS_INFO(FI_LOG_FABRIC,
+			   "Unable to bind address to rdma_cm_id\n");
 		return -errno;
 	}
 
@@ -290,9 +288,9 @@ static int fi_ibv_pep_listen(struct fid_pep *pep_fid)
 
 	addr = rdma_get_local_addr(pep->id);
 	if (addr) {
-		FI_INFO(&fi_ibv_prov, FI_LOG_CORE, "Listening on %s:%d\n",
-			inet_ntoa(((struct sockaddr_in *)addr)->sin_addr),
-			ntohs(((struct sockaddr_in *)addr)->sin_port));
+		VERBS_INFO(FI_LOG_CORE, "Listening on %s:%d\n",
+			   inet_ntoa(((struct sockaddr_in *)addr)->sin_addr),
+			   ntohs(((struct sockaddr_in *)addr)->sin_port));
 	}
 
 	return rdma_listen(pep->id, pep->backlog) ? -errno : 0;
@@ -308,6 +306,7 @@ static struct fi_ops_cm fi_ibv_pep_cm_ops = {
 	.accept = fi_no_accept,
 	.reject = fi_ibv_msg_ep_reject,
 	.shutdown = fi_no_shutdown,
+	.join = fi_no_join,
 };
 
 struct fi_ops_cm *fi_ibv_pep_ops_cm(struct fi_ibv_pep *pep)

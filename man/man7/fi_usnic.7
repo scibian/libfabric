@@ -1,7 +1,7 @@
-.TH "fi_usnic" "7" "2016\-10\-11" "Libfabric Programmer\[aq]s Manual" "Libfabric v1.4.0"
+.TH "fi_usnic" "7" "2017\-12\-01" "Libfabric Programmer\[aq]s Manual" "\@VERSION\@"
 .SH NAME
 .PP
-The usNIC Fabric Provider
+fi_usnic \- The usNIC Fabric Provider
 .SH OVERVIEW
 .PP
 The \f[I]usnic\f[] provider is designed to run over the Cisco VIC
@@ -84,6 +84,16 @@ usage is limited to releases 1.1 and beyond.
 fi_control with FI_GETWAIT may only be used on CQs that have been bound
 to an endpoint.
 If fi_control is used on an unbound CQ, it will return \-FI_EOPBADSTATE.
+.IP \[bu] 2
+There is limited support for data returned as part of an erroneous
+asynchronous operation.
+EQs will return error data for CM operations, CQs do not support
+returning error data.
+.IP \[bu] 2
+As of 1.5, usNIC supports fi_mr_regv, and fi_mr_regattr.
+Support is limited to a single iov.
+.IP \[bu] 2
+Atomic operations are not supported.
 .RE
 .IP \[bu] 2
 Resource management is not supported.
@@ -121,7 +131,7 @@ Although there is a version 1 of the extension, its use is discouraged,
 and it may not be available in future releases.
 .SS Compatibility issues
 .PP
-The addition of version 2 of the extension caused an alignmment issue
+The addition of version 2 of the extension caused an alignment issue
 that could lead to invalid data in the v1 portion of the structure.
 This means that the alignment difference manifests when an application
 using v1 of the extension is compiled with Libfabric v1.1.x or v1.2.x,

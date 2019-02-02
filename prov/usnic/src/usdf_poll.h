@@ -37,13 +37,13 @@
 #ifndef _USDF_POLL_H_
 #define _USDF_POLL_H_
 
-#include "fi_list.h"
+#include "ofi_list.h"
 
 struct usdf_poll {
 	struct fid_poll		poll_fid;
 	struct usdf_domain	*poll_domain;
 
-	atomic_t		poll_refcnt;
+	ofi_atomic32_t		poll_refcnt;
 	fastlock_t		lock;
 	struct dlist_entry	list;
 };

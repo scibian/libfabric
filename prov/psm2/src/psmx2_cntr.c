@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2014 Intel Corporation. All rights reserved.
+ * Copyright (c) 2013-2018 Intel Corporation. All rights reserved.
  *
  * This software is available to you under a choice of one of two
  * licenses.  You may choose to be licensed under the terms of the GNU
@@ -31,213 +31,52 @@
  */
 
 #include "psmx2.h"
-
-int psmx2_process_trigger(struct psmx2_fid_domain *domain,
-			  struct psmx2_trigger *trigger)
-{
-	switch (trigger->op) {
-	case PSMX2_TRIGGERED_SEND:
-		psmx2_send_generic(trigger->send.ep,
-				   trigger->send.buf,
-				   trigger->send.len,
-				   trigger->send.desc,
-				   trigger->send.dest_addr,
-				   trigger->send.context,
-				   trigger->send.flags,
-				   trigger->send.data);
-		break;
-	case PSMX2_TRIGGERED_SENDV:
-		psmx2_sendv_generic(trigger->sendv.ep,
-				    trigger->sendv.iov,
-				    trigger->sendv.desc,
-				    trigger->sendv.count,
-				    trigger->sendv.dest_addr,
-				    trigger->sendv.context,
-				    trigger->sendv.flags,
-				    trigger->sendv.data);
-		break;
-	case PSMX2_TRIGGERED_RECV:
-		psmx2_recv_generic(trigger->recv.ep,
-				   trigger->recv.buf,
-				   trigger->recv.len,
-				   trigger->recv.desc,
-				   trigger->recv.src_addr,
-				   trigger->recv.context,
-				   trigger->recv.flags);
-		break;
-	case PSMX2_TRIGGERED_TSEND:
-		psmx2_tagged_send_generic(trigger->tsend.ep,
-					  trigger->tsend.buf,
-					  trigger->tsend.len,
-					  trigger->tsend.desc,
-					  trigger->tsend.dest_addr,
-					  trigger->tsend.tag,
-					  trigger->tsend.context,
-					  trigger->tsend.flags,
-					  trigger->tsend.data);
-		break;
-	case PSMX2_TRIGGERED_TSENDV:
-		psmx2_tagged_sendv_generic(trigger->tsendv.ep,
-					   trigger->tsendv.iov,
-					   trigger->tsendv.desc,
-					   trigger->tsendv.count,
-					   trigger->tsendv.dest_addr,
-					   trigger->tsendv.tag,
-					   trigger->tsendv.context,
-					   trigger->tsendv.flags,
-					   trigger->tsendv.data);
-		break;
-	case PSMX2_TRIGGERED_TRECV:
-		psmx2_tagged_recv_generic(trigger->trecv.ep,
-					  trigger->trecv.buf,
-					  trigger->trecv.len,
-					  trigger->trecv.desc,
-					  trigger->trecv.src_addr,
-					  trigger->trecv.tag,
-					  trigger->trecv.ignore,
-					  trigger->trecv.context,
-					  trigger->trecv.flags);
-		break;
-	case PSMX2_TRIGGERED_WRITE:
-		psmx2_write_generic(trigger->write.ep,
-				    trigger->write.buf,
-				    trigger->write.len,
-				    trigger->write.desc,
-				    trigger->write.dest_addr,
-				    trigger->write.addr,
-				    trigger->write.key,
-				    trigger->write.context,
-				    trigger->write.flags,
-				    trigger->write.data);
-		break;
-
-	case PSMX2_TRIGGERED_WRITEV:
-		psmx2_writev_generic(trigger->writev.ep,
-				     trigger->writev.iov,
-				     trigger->writev.desc,
-				     trigger->writev.count,
-				     trigger->writev.dest_addr,
-				     trigger->writev.addr,
-				     trigger->writev.key,
-				     trigger->writev.context,
-				     trigger->writev.flags,
-				     trigger->writev.data);
-		break;
-
-	case PSMX2_TRIGGERED_READ:
-		psmx2_read_generic(trigger->read.ep,
-				   trigger->read.buf,
-				   trigger->read.len,
-				   trigger->read.desc,
-				   trigger->read.src_addr,
-				   trigger->read.addr,
-				   trigger->read.key,
-				   trigger->read.context,
-				   trigger->read.flags);
-		break;
-
-	case PSMX2_TRIGGERED_READV:
-		psmx2_readv_generic(trigger->readv.ep,
-				    trigger->readv.iov,
-				    trigger->readv.desc,
-				    trigger->readv.count,
-				    trigger->readv.src_addr,
-				    trigger->readv.addr,
-				    trigger->readv.key,
-				    trigger->readv.context,
-				    trigger->readv.flags);
-		break;
-
-	case PSMX2_TRIGGERED_ATOMIC_WRITE:
-		psmx2_atomic_write_generic(
-				trigger->atomic_write.ep,
-				trigger->atomic_write.buf,
-				trigger->atomic_write.count,
-				trigger->atomic_write.desc,
-				trigger->atomic_write.dest_addr,
-				trigger->atomic_write.addr,
-				trigger->atomic_write.key,
-				trigger->atomic_write.datatype,
-				trigger->atomic_write.atomic_op,
-				trigger->atomic_write.context,
-				trigger->atomic_write.flags);
-		break;
-
-	case PSMX2_TRIGGERED_ATOMIC_READWRITE:
-		psmx2_atomic_readwrite_generic(
-				trigger->atomic_readwrite.ep,
-				trigger->atomic_readwrite.buf,
-				trigger->atomic_readwrite.count,
-				trigger->atomic_readwrite.desc,
-				trigger->atomic_readwrite.result,
-				trigger->atomic_readwrite.result_desc,
-				trigger->atomic_readwrite.dest_addr,
-				trigger->atomic_readwrite.addr,
-				trigger->atomic_readwrite.key,
-				trigger->atomic_readwrite.datatype,
-				trigger->atomic_readwrite.atomic_op,
-				trigger->atomic_readwrite.context,
-				trigger->atomic_readwrite.flags);
-		break;
-
-	case PSMX2_TRIGGERED_ATOMIC_COMPWRITE:
-		psmx2_atomic_compwrite_generic(
-				trigger->atomic_compwrite.ep,
-				trigger->atomic_compwrite.buf,
-				trigger->atomic_compwrite.count,
-				trigger->atomic_compwrite.desc,
-				trigger->atomic_compwrite.compare,
-				trigger->atomic_compwrite.compare_desc,
-				trigger->atomic_compwrite.result,
-				trigger->atomic_compwrite.result_desc,
-				trigger->atomic_compwrite.dest_addr,
-				trigger->atomic_compwrite.addr,
-				trigger->atomic_compwrite.key,
-				trigger->atomic_compwrite.datatype,
-				trigger->atomic_compwrite.atomic_op,
-				trigger->atomic_compwrite.context,
-				trigger->atomic_compwrite.flags);
-		break;
-	default:
-		FI_INFO(&psmx2_prov, FI_LOG_CQ,
-			"%d unsupported op\n", trigger->op);
-		break;
-	}
-
-	free(trigger);
-	return 0;
-}
+#include "psmx2_trigger.h"
 
 void psmx2_cntr_check_trigger(struct psmx2_fid_cntr *cntr)
 {
-	struct psmx2_fid_domain *domain = cntr->domain;
 	struct psmx2_trigger *trigger;
+	struct psmx2_trx_ctxt *trx_ctxt;
+	struct psmx2_fid_ep *ep;
 
 	if (!cntr->trigger)
 		return;
 
-	pthread_mutex_lock(&cntr->trigger_lock);
+	psmx2_lock(&cntr->trigger_lock, 2);
 
 	trigger = cntr->trigger;
 	while (trigger) {
-		if (atomic_get(&cntr->counter) < trigger->threshold)
+		if (ofi_atomic_get64(&cntr->counter) < trigger->threshold)
 			break;
 
 		cntr->trigger = trigger->next;
 
-		if (domain->am_initialized) {
-			fastlock_acquire(&domain->trigger_queue.lock);
+		/* 'ep' is the first field of the union regardless of the op type */
+		ep = container_of(trigger->send.ep, struct psmx2_fid_ep, ep);
+
+		switch (trigger->op) {
+		case PSMX2_TRIGGERED_RECV:
+		case PSMX2_TRIGGERED_TRECV:
+			trx_ctxt = ep->rx;
+			break;
+		default:
+			trx_ctxt = ep->tx;
+			break;
+		}
+
+		if (trx_ctxt->am_initialized) {
+			psmx2_lock(&trx_ctxt->trigger_queue.lock, 2);
 			slist_insert_tail(&trigger->list_entry,
-					  &domain->trigger_queue.list);
-			fastlock_release(&domain->trigger_queue.lock);
+					  &trx_ctxt->trigger_queue.list);
+			psmx2_unlock(&trx_ctxt->trigger_queue.lock, 2);
 		} else {
-			psmx2_process_trigger(domain, trigger);
+			psmx2_process_trigger(trx_ctxt, trigger);
 		}
 
 		trigger = cntr->trigger;
 	}
 
-	pthread_mutex_unlock(&cntr->trigger_lock);
+	psmx2_unlock(&cntr->trigger_lock, 2);
 }
 
 void psmx2_cntr_add_trigger(struct psmx2_fid_cntr *cntr,
@@ -245,7 +84,7 @@ void psmx2_cntr_add_trigger(struct psmx2_fid_cntr *cntr,
 {
 	struct psmx2_trigger *p, *q;
 
-	pthread_mutex_lock(&cntr->trigger_lock);
+	psmx2_lock(&cntr->trigger_lock, 2);
 
 	q = NULL;
 	p = cntr->trigger;
@@ -259,25 +98,32 @@ void psmx2_cntr_add_trigger(struct psmx2_fid_cntr *cntr,
 		cntr->trigger = trigger;
 	trigger->next = p;
 
-	pthread_mutex_unlock(&cntr->trigger_lock);
+	psmx2_unlock(&cntr->trigger_lock, 2);
 
 	psmx2_cntr_check_trigger(cntr);
 }
 
-#define PSMX2_CNTR_POLL_THRESHOLD 100
 static uint64_t psmx2_cntr_read(struct fid_cntr *cntr)
 {
 	struct psmx2_fid_cntr *cntr_priv;
-	static int poll_cnt = 0;
+	struct psmx2_poll_ctxt *poll_ctxt;
+	struct slist_entry *item, *prev;
 
 	cntr_priv = container_of(cntr, struct psmx2_fid_cntr, cntr);
 
-	if (poll_cnt++ == PSMX2_CNTR_POLL_THRESHOLD) {
-		psmx2_progress(cntr_priv->domain);
-		poll_cnt = 0;
+	if (cntr_priv->poll_all) {
+		psmx2_progress_all(cntr_priv->domain);
+	} else {
+		slist_foreach(&cntr_priv->poll_list, item, prev) {
+			poll_ctxt = container_of(item,
+						 struct psmx2_poll_ctxt,
+						 list_entry);
+			psmx2_progress(poll_ctxt->trx_ctxt);
+			(void) prev; /* suppress compiler warning */
+		}
 	}
 
-	return atomic_get(&cntr_priv->counter);
+	return ofi_atomic_get64(&cntr_priv->counter);
 }
 
 static uint64_t psmx2_cntr_readerr(struct fid_cntr *cntr)
@@ -285,8 +131,9 @@ static uint64_t psmx2_cntr_readerr(struct fid_cntr *cntr)
 	struct psmx2_fid_cntr *cntr_priv;
 
 	cntr_priv = container_of(cntr, struct psmx2_fid_cntr, cntr);
+	cntr_priv->error_avail = 0;
 
-	return atomic_get(&cntr_priv->error_counter);
+	return ofi_atomic_get64(&cntr_priv->error_counter);
 }
 
 static int psmx2_cntr_add(struct fid_cntr *cntr, uint64_t value)
@@ -294,7 +141,7 @@ static int psmx2_cntr_add(struct fid_cntr *cntr, uint64_t value)
 	struct psmx2_fid_cntr *cntr_priv;
 
 	cntr_priv = container_of(cntr, struct psmx2_fid_cntr, cntr);
-	atomic_add(&cntr_priv->counter, value);
+	ofi_atomic_add64(&cntr_priv->counter, value);
 
 	psmx2_cntr_check_trigger(cntr_priv);
 
@@ -309,7 +156,39 @@ static int psmx2_cntr_set(struct fid_cntr *cntr, uint64_t value)
 	struct psmx2_fid_cntr *cntr_priv;
 
 	cntr_priv = container_of(cntr, struct psmx2_fid_cntr, cntr);
-	atomic_set(&cntr_priv->counter, value);
+	ofi_atomic_set64(&cntr_priv->counter, value);
+
+	psmx2_cntr_check_trigger(cntr_priv);
+
+	if (cntr_priv->wait)
+		cntr_priv->wait->signal(cntr_priv->wait);
+
+	return 0;
+}
+
+static int psmx2_cntr_adderr(struct fid_cntr *cntr, uint64_t value)
+{
+	struct psmx2_fid_cntr *cntr_priv;
+
+	cntr_priv = container_of(cntr, struct psmx2_fid_cntr, cntr);
+	ofi_atomic_add64(&cntr_priv->error_counter, value);
+	cntr_priv->error_avail = 1;
+
+	psmx2_cntr_check_trigger(cntr_priv);
+
+	if (cntr_priv->wait)
+		cntr_priv->wait->signal(cntr_priv->wait);
+
+	return 0;
+}
+
+static int psmx2_cntr_seterr(struct fid_cntr *cntr, uint64_t value)
+{
+	struct psmx2_fid_cntr *cntr_priv;
+
+	cntr_priv = container_of(cntr, struct psmx2_fid_cntr, cntr);
+	ofi_atomic_set64(&cntr_priv->error_counter, value);
+	cntr_priv->error_avail = 1;
 
 	psmx2_cntr_check_trigger(cntr_priv);
 
@@ -322,6 +201,8 @@ static int psmx2_cntr_set(struct fid_cntr *cntr, uint64_t value)
 static int psmx2_cntr_wait(struct fid_cntr *cntr, uint64_t threshold, int timeout)
 {
 	struct psmx2_fid_cntr *cntr_priv;
+	struct psmx2_poll_ctxt *poll_ctxt;
+	struct slist_entry *item, *prev;
 	struct timespec ts0, ts;
 	int msec_passed = 0;
 	int ret = 0;
@@ -330,17 +211,35 @@ static int psmx2_cntr_wait(struct fid_cntr *cntr, uint64_t threshold, int timeou
 
 	clock_gettime(CLOCK_REALTIME, &ts0);
 
-	while (atomic_get(&cntr_priv->counter) < threshold) {
+	while (ofi_atomic_get64(&cntr_priv->counter) < threshold) {
+		if (cntr_priv->error_avail) {
+			ret = -FI_EAVAIL;
+			break;
+		}
+
 		if (cntr_priv->wait) {
 			ret = fi_wait((struct fid_wait *)cntr_priv->wait,
 				      timeout - msec_passed);
 			if (ret == -FI_ETIMEDOUT)
 				break;
+		} else if (cntr_priv->poll_all) {
+			psmx2_progress_all(cntr_priv->domain);
 		} else {
-			psmx2_progress(cntr_priv->domain);
+			slist_foreach(&cntr_priv->poll_list, item, prev) {
+				poll_ctxt = container_of(item,
+							 struct psmx2_poll_ctxt,
+							 list_entry);
+				psmx2_progress(poll_ctxt->trx_ctxt);
+				(void) prev; /* suppress compiler warning */
+			}
 		}
 
-		if (atomic_get(&cntr_priv->counter) >= threshold)
+		if (cntr_priv->error_avail) {
+			ret = -FI_EAVAIL;
+			break;
+		}
+
+		if (ofi_atomic_get64(&cntr_priv->counter) >= threshold)
 			break;
 
 		if (timeout < 0)
@@ -362,8 +261,16 @@ static int psmx2_cntr_wait(struct fid_cntr *cntr, uint64_t threshold, int timeou
 static int psmx2_cntr_close(fid_t fid)
 {
 	struct psmx2_fid_cntr *cntr;
+	struct psmx2_poll_ctxt *item;
+	struct slist_entry *entry;
 
 	cntr = container_of(fid, struct psmx2_fid_cntr, cntr.fid);
+
+	while (!slist_empty(&cntr->poll_list)) {
+		entry = slist_remove_head(&cntr->poll_list);
+		item = container_of(entry, struct psmx2_poll_ctxt, list_entry);
+		free(item);
+	}
 
 	if (cntr->wait) {
 		fi_poll_del(&cntr->wait->pollset->poll_fid, &cntr->cntr.fid, 0);
@@ -371,7 +278,7 @@ static int psmx2_cntr_close(fid_t fid)
 			fi_close((fid_t)cntr->wait);
 	}
 
-	pthread_mutex_destroy(&cntr->trigger_lock);
+	fastlock_destroy(&cntr->trigger_lock);
 	psmx2_domain_release(cntr->domain);
 	free(cntr);
 
@@ -424,6 +331,8 @@ static struct fi_ops_cntr psmx2_cntr_ops = {
 	.add = psmx2_cntr_add,
 	.set = psmx2_cntr_set,
 	.wait = psmx2_cntr_wait,
+	.adderr = psmx2_cntr_adderr,
+	.seterr = psmx2_cntr_seterr,
 };
 
 int psmx2_cntr_open(struct fid_domain *domain, struct fi_cntr_attr *attr,
@@ -457,6 +366,7 @@ int psmx2_cntr_open(struct fid_domain *domain, struct fi_cntr_attr *attr,
 
 	switch (attr->wait_obj) {
 	case FI_WAIT_NONE:
+	case FI_WAIT_UNSPEC:
 		break;
 
 	case FI_WAIT_SET:
@@ -468,7 +378,6 @@ int psmx2_cntr_open(struct fid_domain *domain, struct fi_cntr_attr *attr,
 		wait = attr->wait_set;
 		break;
 
-	case FI_WAIT_UNSPEC:
 	case FI_WAIT_FD:
 	case FI_WAIT_MUTEX_COND:
 		wait_attr.wait_obj = attr->wait_obj;
@@ -504,10 +413,11 @@ int psmx2_cntr_open(struct fid_domain *domain, struct fi_cntr_attr *attr,
 	cntr_priv->cntr.fid.context = context;
 	cntr_priv->cntr.fid.ops = &psmx2_fi_ops;
 	cntr_priv->cntr.ops = &psmx2_cntr_ops;
-	atomic_initialize(&cntr_priv->counter, 0);
-	atomic_initialize(&cntr_priv->error_counter, 0);
+	ofi_atomic_initialize64(&cntr_priv->counter, 0);
+	ofi_atomic_initialize64(&cntr_priv->error_counter, 0);
 
-	pthread_mutex_init(&cntr_priv->trigger_lock, NULL);
+	slist_init(&cntr_priv->poll_list);
+	fastlock_init(&cntr_priv->trigger_lock);
 
 	if (wait)
 		fi_poll_add(&cntr_priv->wait->pollset->poll_fid,

@@ -7,14 +7,14 @@ The Debian version of libfabric currently supports the following providers:
 - verbs
 - udp
 - psm
+- psm2 (amd64 only)
 - rxd
 - rxm
 
 Other available providers, not built in the Debian package, are:
+- bgq
 - gni
-- mxm, needs Mellanox MXM. Note that this provider will be deprecated in the
-future versions of libfabric.
-- psm2, needs Intel's libpsm2: https://github.com/01org/opa-psm2/
+- mlx
 - usnic
 
 
@@ -22,5 +22,4 @@ Fabtests
 --------
 
 fabtests is not packaged in Debian, you can fetch a source package from:
-https://anonscm.debian.org/cgit/pkg-ofed/fabtests.git/
-
+https://salsa.debian.org/hpc-team/fabtests
