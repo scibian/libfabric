@@ -1,4 +1,6 @@
 usr/include/*
-usr/lib/*/lib*.so
-usr/share/man/man3
-usr/lib/*/pkgconfig/libfabric.pc
+usr/lib/*/*.a
+usr/lib/*/*.so
+usr/lib/*/pkgconfig/*
+usr/share/man/man3/*
+usr/share/man/man7/*

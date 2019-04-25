@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2014 Intel Corporation. All rights reserved.
+ * Copyright (c) 2013-2017 Intel Corporation. All rights reserved.
  *
  * This software is available to you under a choice of one of two
  * licenses.  You may choose to be licensed under the terms of the GNU
@@ -397,7 +397,7 @@ int psmx_am_atomic_handler(psm_am_token_t token, psm_epaddr_t epaddr,
 		key = args[3].u64;
 		datatype = args[4].u32w0;
 		op = args[4].u32w1;
-		assert(len == fi_datatype_size(datatype) * count);
+		assert(len == ofi_datatype_size(datatype) * count);
 
 		mr = psmx_mr_get(psmx_active_fabric->active_domain, key);
 		op_error = mr ?
@@ -409,14 +409,16 @@ int psmx_am_atomic_handler(psm_am_token_t token, psm_epaddr_t epaddr,
 			psmx_atomic_do_write(addr, src, datatype, op, count);
 
 			target_ep = mr->domain->atomics_ep;
-			cntr = target_ep->remote_write_cntr;
-			mr_cntr = mr->cntr;
+			if (target_ep->caps & FI_RMA_EVENT) {
+				cntr = target_ep->remote_write_cntr;
+				mr_cntr = mr->cntr;
 
-			if (cntr)
-				psmx_cntr_inc(cntr);
+				if (cntr)
+					psmx_cntr_inc(cntr);
 
-			if (mr_cntr && mr_cntr != cntr)
-				psmx_cntr_inc(mr_cntr);
+				if (mr_cntr && mr_cntr != cntr)
+					psmx_cntr_inc(mr_cntr);
+			}
 		}
 
 		rep_args[0].u32w0 = PSMX_AM_REP_ATOMIC_WRITE;
@@ -435,9 +437,9 @@ int psmx_am_atomic_handler(psm_am_token_t token, psm_epaddr_t epaddr,
 		op = args[4].u32w1;
 
 		if (op == FI_ATOMIC_READ)
-			len = fi_datatype_size(datatype) * count;
+			len = ofi_datatype_size(datatype) * count;
 
-		assert(len == fi_datatype_size(datatype) * count);
+		assert(len == ofi_datatype_size(datatype) * count);
 
 		mr = psmx_mr_get(psmx_active_fabric->active_domain, key);
 		op_error = mr ?
@@ -454,18 +456,20 @@ int psmx_am_atomic_handler(psm_am_token_t token, psm_epaddr_t epaddr,
 				op_error = -FI_ENOMEM;
 
 			target_ep = mr->domain->atomics_ep;
-			if (op == FI_ATOMIC_READ) {
-				cntr = target_ep->remote_read_cntr;
-			} else {
-				cntr = target_ep->remote_write_cntr;
-				mr_cntr = mr->cntr;
+			if (target_ep->caps & FI_RMA_EVENT) {
+				if (op == FI_ATOMIC_READ) {
+					cntr = target_ep->remote_read_cntr;
+				} else {
+					cntr = target_ep->remote_write_cntr;
+					mr_cntr = mr->cntr;
+				}
+
+				if (cntr)
+					psmx_cntr_inc(cntr);
+
+				if (mr_cntr && mr_cntr != cntr)
+					psmx_cntr_inc(mr_cntr);
 			}
-
-			if (cntr)
-				psmx_cntr_inc(cntr);
-
-			if (mr_cntr && mr_cntr != cntr)
-				psmx_cntr_inc(mr_cntr);
 		} else {
 			tmp_buf = NULL;
 		}
@@ -485,7 +489,7 @@ int psmx_am_atomic_handler(psm_am_token_t token, psm_epaddr_t epaddr,
 		datatype = args[4].u32w0;
 		op = args[4].u32w1;
 		len /= 2;
-		assert(len == fi_datatype_size(datatype) * count);
+		assert(len == ofi_datatype_size(datatype) * count);
 
 		mr = psmx_mr_get(psmx_active_fabric->active_domain, key);
 		op_error = mr ?
@@ -502,14 +506,16 @@ int psmx_am_atomic_handler(psm_am_token_t token, psm_epaddr_t epaddr,
 				op_error = -FI_ENOMEM;
 
 			target_ep = mr->domain->atomics_ep;
-			cntr = target_ep->remote_write_cntr;
-			mr_cntr = mr->cntr;
+			if (target_ep->caps & FI_RMA_EVENT) {
+				cntr = target_ep->remote_write_cntr;
+				mr_cntr = mr->cntr;
 
-			if (cntr)
-				psmx_cntr_inc(cntr);
+				if (cntr)
+					psmx_cntr_inc(cntr);
 
-			if (mr_cntr && mr_cntr != cntr)
-				psmx_cntr_inc(mr_cntr);
+				if (mr_cntr && mr_cntr != cntr)
+					psmx_cntr_inc(mr_cntr);
+			}
 		} else {
 			tmp_buf = NULL;
 		}
@@ -526,7 +532,7 @@ int psmx_am_atomic_handler(psm_am_token_t token, psm_epaddr_t epaddr,
 		req = (struct psmx_am_request *)(uintptr_t)args[1].u64;
 		op_error = (int)args[0].u32w1;
 		assert(req->op == PSMX_AM_REQ_ATOMIC_WRITE);
-		if (req->ep->send_cq && !req->no_event) {
+		if (req->ep->send_cq && (!req->no_event || op_error)) {
 			event = psmx_cq_create_event(
 					req->ep->send_cq,
 					req->atomic.context,
@@ -558,7 +564,7 @@ int psmx_am_atomic_handler(psm_am_token_t token, psm_epaddr_t epaddr,
 		if (!op_error)
 			memcpy(req->atomic.result, src, len);
 
-		if (req->ep->send_cq && !req->no_event) {
+		if (req->ep->send_cq && (!req->no_event || op_error)) {
 			event = psmx_cq_create_event(
 					req->ep->send_cq,
 					req->atomic.context,
@@ -616,7 +622,7 @@ static int psmx_atomic_self(int am_cmd,
 	else
 		access = FI_REMOTE_READ | FI_REMOTE_WRITE;
 
-	len = fi_datatype_size(datatype) * count;
+	len = ofi_datatype_size(datatype) * count;
 	mr = psmx_mr_get(psmx_active_fabric->active_domain, key);
 	op_error = mr ?  psmx_mr_validate(mr, addr, len, access) : -FI_EINVAL;
 
@@ -679,23 +685,25 @@ static int psmx_atomic_self(int am_cmd,
 	}
 
 	target_ep = mr->domain->atomics_ep;
-	if (op == FI_ATOMIC_READ) {
-		cntr = target_ep->remote_read_cntr;
-	} else {
-		cntr = target_ep->remote_write_cntr;
-		mr_cntr = mr->cntr;
+	if (target_ep->caps & FI_RMA_EVENT) {
+		if (op == FI_ATOMIC_READ) {
+			cntr = target_ep->remote_read_cntr;
+		} else {
+			cntr = target_ep->remote_write_cntr;
+			mr_cntr = mr->cntr;
+		}
+
+		if (cntr)
+			psmx_cntr_inc(cntr);
+
+		if (mr_cntr && mr_cntr != cntr)
+			psmx_cntr_inc(mr_cntr);
 	}
-
-	if (cntr)
-		psmx_cntr_inc(cntr);
-
-	if (mr_cntr && mr_cntr != cntr)
-		psmx_cntr_inc(mr_cntr);
 
 gen_local_event:
 	no_event = ((flags & PSMX_NO_COMPLETION) ||
 		    (ep->send_selective_completion && !(flags & FI_COMPLETION)));
-	if (ep->send_cq && !no_event) {
+	if (ep->send_cq && (!no_event || op_error)) {
 		event = psmx_cq_create_event(
 				ep->send_cq,
 				context,
@@ -778,10 +786,10 @@ ssize_t _psmx_atomic_write(struct fid_ep *ep,
 	if (!buf)
 		return -FI_EINVAL;
 
-	if (datatype < 0 || datatype >= FI_DATATYPE_LAST)
+	if (datatype >= FI_DATATYPE_LAST)
 		return -FI_EINVAL;
 
-	if (op < 0 || op >= FI_ATOMIC_OP_LAST)
+	if (op >= FI_ATOMIC_OP_LAST)
 		return -FI_EINVAL;
 
 	av = ep_priv->av;
@@ -804,7 +812,7 @@ ssize_t _psmx_atomic_write(struct fid_ep *ep,
 					context, flags);
 
 	chunk_size = MIN(PSMX_AM_CHUNK_SIZE, psmx_am_param.max_request_short);
-	len = fi_datatype_size(datatype)* count;
+	len = ofi_datatype_size(datatype)* count;
 	if (len > chunk_size)
 		return -FI_EMSGSIZE;
 
@@ -965,10 +973,10 @@ ssize_t _psmx_atomic_readwrite(struct fid_ep *ep,
 	if (!buf && op != FI_ATOMIC_READ)
 		return -FI_EINVAL;
 
-	if (datatype < 0 || datatype >= FI_DATATYPE_LAST)
+	if (datatype >= FI_DATATYPE_LAST)
 		return -FI_EINVAL;
 
-	if (op < 0 || op >= FI_ATOMIC_OP_LAST)
+	if (op >= FI_ATOMIC_OP_LAST)
 		return -FI_EINVAL;
 
 	av = ep_priv->av;
@@ -991,7 +999,7 @@ ssize_t _psmx_atomic_readwrite(struct fid_ep *ep,
 					context, flags);
 
 	chunk_size = MIN(PSMX_AM_CHUNK_SIZE, psmx_am_param.max_request_short);
-	len = fi_datatype_size(datatype) * count;
+	len = ofi_datatype_size(datatype) * count;
 	if (len > chunk_size)
 		return -FI_EMSGSIZE;
 
@@ -1170,10 +1178,10 @@ ssize_t _psmx_atomic_compwrite(struct fid_ep *ep,
 	if (!buf)
 		return -FI_EINVAL;
 
-	if (datatype < 0 || datatype >= FI_DATATYPE_LAST)
+	if (datatype >= FI_DATATYPE_LAST)
 		return -FI_EINVAL;
 
-	if (op < 0 || op >= FI_ATOMIC_OP_LAST)
+	if (op >= FI_ATOMIC_OP_LAST)
 		return -FI_EINVAL;
 
 	av = ep_priv->av;
@@ -1197,7 +1205,7 @@ ssize_t _psmx_atomic_compwrite(struct fid_ep *ep,
 					context, flags);
 
 	chunk_size = MIN(PSMX_AM_CHUNK_SIZE, psmx_am_param.max_request_short);
-	len = fi_datatype_size(datatype) * count;
+	len = ofi_datatype_size(datatype) * count;
 	if (len * 2 > chunk_size)
 		return -FI_EMSGSIZE;
 
@@ -1273,7 +1281,7 @@ static ssize_t psmx_atomic_compwrite(struct fid_ep *ep,
 					compare, compare_desc,
 					result, result_desc,
 					dest_addr, addr, key,
-				        datatype, op, context, ep_priv->tx_flags);
+					datatype, op, context, ep_priv->tx_flags);
 }
 
 static ssize_t psmx_atomic_compwritemsg(struct fid_ep *ep,
@@ -1333,7 +1341,7 @@ static int psmx_atomic_writevalid(struct fid_ep *ep,
 {
 	int chunk_size;
 
-	if (datatype < 0 || datatype >= FI_DATATYPE_LAST)
+	if (datatype >= FI_DATATYPE_LAST)
 		return -FI_EOPNOTSUPP;
 
 	switch (op) {
@@ -1357,7 +1365,7 @@ static int psmx_atomic_writevalid(struct fid_ep *ep,
 	if (count) {
 		chunk_size = MIN(PSMX_AM_CHUNK_SIZE,
 				 psmx_am_param.max_request_short);
-		*count = chunk_size / fi_datatype_size(datatype);
+		*count = chunk_size / ofi_datatype_size(datatype);
 	}
 	return 0;
 }
@@ -1368,7 +1376,7 @@ static int psmx_atomic_readwritevalid(struct fid_ep *ep,
 {
 	int chunk_size;
 
-	if (datatype < 0 || datatype >= FI_DATATYPE_LAST)
+	if (datatype >= FI_DATATYPE_LAST)
 		return -FI_EOPNOTSUPP;
 
 	switch (op) {
@@ -1393,7 +1401,7 @@ static int psmx_atomic_readwritevalid(struct fid_ep *ep,
 	if (count) {
 		chunk_size = MIN(PSMX_AM_CHUNK_SIZE,
 				 psmx_am_param.max_request_short);
-		*count = chunk_size / fi_datatype_size(datatype);
+		*count = chunk_size / ofi_datatype_size(datatype);
 	}
 	return 0;
 }
@@ -1404,7 +1412,7 @@ static int psmx_atomic_compwritevalid(struct fid_ep *ep,
 {
 	int chunk_size;
 
-	if (datatype < 0 || datatype >= FI_DATATYPE_LAST)
+	if (datatype >= FI_DATATYPE_LAST)
 		return -FI_EOPNOTSUPP;
 
 	switch (op) {
@@ -1439,9 +1447,36 @@ static int psmx_atomic_compwritevalid(struct fid_ep *ep,
 	if (count) {
 		chunk_size = MIN(PSMX_AM_CHUNK_SIZE,
 				 psmx_am_param.max_request_short);
-		*count = chunk_size / (2 * fi_datatype_size(datatype));
+		*count = chunk_size / (2 * ofi_datatype_size(datatype));
 	}
 	return 0;
+}
+
+int psmx_query_atomic(struct fid_domain *doamin, enum fi_datatype datatype,
+		      enum fi_op op, struct fi_atomic_attr *attr, uint64_t flags)
+{
+	int ret;
+	size_t count;
+
+	if (flags & FI_TAGGED)
+		return -FI_EOPNOTSUPP;
+
+	if (flags & FI_COMPARE_ATOMIC) {
+		if (flags & FI_FETCH_ATOMIC)
+			return -FI_EINVAL;
+		ret = psmx_atomic_compwritevalid(NULL, datatype, op, &count);
+	} else if (flags & FI_FETCH_ATOMIC) {
+		ret = psmx_atomic_readwritevalid(NULL, datatype, op, &count);
+	} else {
+		ret = psmx_atomic_writevalid(NULL, datatype, op, &count);
+	}
+
+	if (attr && !ret) {
+		attr->size = ofi_datatype_size(datatype);
+		attr->count = count;
+	}
+
+	return ret;
 }
 
 struct fi_ops_atomic psmx_atomic_ops = {

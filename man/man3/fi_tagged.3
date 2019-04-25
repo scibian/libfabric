@@ -1,4 +1,4 @@
-.TH "fi_tagged" "3" "2016\-09\-19" "Libfabric Programmer\[aq]s Manual" "Libfabric v1.4.0"
+.TH "fi_tagged" "3" "2017\-10\-20" "Libfabric Programmer\[aq]s Manual" "\@VERSION\@"
 .SH NAME
 .PP
 fi_tagged \- Tagged data transfer operations
@@ -21,7 +21,7 @@ Initiate an operation to send a message
 ssize_t\ fi_trecv(struct\ fid_ep\ *ep,\ void\ *buf,\ size_t\ len,\ void\ *desc,
 \ \ \ \ fi_addr_t\ src_addr,\ uint64_t\ tag,\ uint64_t\ ignore,\ void\ *context);
 
-ssize_t\ fi_trecvv(struct\ fid_ep\ *ep,\ const\ struct\ iovec\ *iov,\ void\ *desc,
+ssize_t\ fi_trecvv(struct\ fid_ep\ *ep,\ const\ struct\ iovec\ *iov,\ void\ **desc,
 \ \ \ \ size_t\ count,\ fi_addr_t\ src_addr,\ uint64_t\ tag,\ uint64_t\ ignore,
 \ \ \ \ void\ *context);
 
@@ -32,7 +32,7 @@ ssize_t\ fi_tsend(struct\ fid_ep\ *ep,\ const\ void\ *buf,\ size_t\ len,
 \ \ \ \ void\ *desc,\ fi_addr_t\ dest_addr,\ uint64_t\ tag,\ void\ *context);
 
 ssize_t\ fi_tsendv(struct\ fid_ep\ *ep,\ const\ struct\ iovec\ *iov,
-\ \ \ \ void\ *desc,\ size_t\ count,\ fi_addr_t\ dest_addr,\ uint64_t\ tag,
+\ \ \ \ void\ **desc,\ size_t\ count,\ fi_addr_t\ dest_addr,\ uint64_t\ tag,
 \ \ \ \ void\ *context);
 
 ssize_t\ fi_tsendmsg(struct\ fid_ep\ *ep,\ const\ struct\ fi_msg_tagged\ *msg,
@@ -123,6 +123,13 @@ operation has completed.
 Posted receive buffers are matched with inbound send messages based on
 the tags associated with the send and receive buffers.
 .PP
+An endpoint must be enabled before an application can post send or
+receive operations to it.
+For connected endpoints, receive buffers may be posted prior to connect
+or accept being called on the endpoint.
+This ensures that buffers are available to receive incoming data
+immediately after the connection has been established.
+.PP
 Completed message operations are reported to the user through one or
 more event collectors associated with the endpoint.
 Users provide context which are associated with each operation, and is
@@ -155,8 +162,8 @@ The fi_tsendmsg function takes a struct fi_msg_tagged as input.
 struct\ fi_msg_tagged\ {
 \ \ \ \ const\ struct\ iovec\ *msg_iov;\ /*\ scatter\-gather\ array\ */
 \ \ \ \ void\ \ \ \ \ \ \ \ \ \ \ \ \ \ \ *desc;\ \ \ \ /*\ data\ descriptor\ */
-\ \ \ \ size_t\ \ \ \ \ \ \ \ \ \ \ \ \ iov_count;/*\ #\ elements\ in\ msg_iov\ *
-\ \ \ \ const\ void\ \ \ \ \ \ \ \ \ *addr;\ \ \ \ /*\ optional\ endpoint\ address\ */
+\ \ \ \ size_t\ \ \ \ \ \ \ \ \ \ \ \ \ iov_count;/*\ #\ elements\ in\ msg_iov\ */
+\ \ \ \ fi_addr_t\ \ \ \ \ \ \ \ \ \ addr;\ \ \ \ /*\ optional\ endpoint\ address\ */
 \ \ \ \ uint64_t\ \ \ \ \ \ \ \ \ \ \ tag;\ \ \ \ \ \ /*\ tag\ associated\ with\ message\ */
 \ \ \ \ uint64_t\ \ \ \ \ \ \ \ \ \ \ ignore;\ \ \ /*\ mask\ applied\ to\ tag\ for\ receives\ */
 \ \ \ \ void\ \ \ \ \ \ \ \ \ \ \ \ \ \ \ *context;\ /*\ user\-defined\ context\ */
@@ -252,8 +259,15 @@ provider.
 .PP
 \f[I]FI_FENCE\f[] : Applies to transmits.
 Indicates that the requested operation, also known as the fenced
-operation, be deferred until all previous operations targeting the same
-target endpoint have completed.
+operation, and any operation posted after the fenced operation will be
+deferred until all previous operations targeting the same peer endpoint
+have completed.
+Operations posted after the fencing will see and/or replace the results
+of any operations initiated prior to the fenced operation.
+.PP
+The ordering of operations starting at the posting of the fenced
+operation (inclusive) to the posting of a subsequent fenced operation
+(exclusive) is controlled by the endpoint\[aq]s ordering semantics.
 .PP
 The following flags may be used with fi_trecvmsg.
 .PP
@@ -319,7 +333,8 @@ This flag may also be used in conjunction with FI_CLAIM in order to
 retrieve and discard a message previously claimed using an FI_PEEK +
 FI_CLAIM request.
 .PP
-If this flag is set, the input buffer(s) and length parameters.
+If this flag is set, the input buffer(s) and length parameters are
+ignored.
 .SH RETURN VALUE
 .PP
 The tagged send and receive calls return 0 on success.
