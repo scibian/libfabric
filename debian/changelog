@@ -1,0 +1,37 @@
+libfabric (1.6.2-25-1ifs+deb8) jessie; urgency=medium
+
+  * Import libfabric 1.6.2-25 from IFS RHEL76 10.9.3.1.1 upstream.
+
+ -- Brian T. Smith <bsmith@systemfabricworks.com>  Tue, 25 Jun 2019 15:47:44 -0500
+
+libfabric (1.6.2-24-1ifs+deb8) jessie; urgency=medium
+
+  * Import libfabric 1.6.2-24 from IFS RHEL76 10.9.2.0.9 upstream.
+
+ -- Brian T. Smith <bsmith@systemfabricworks.com>  Fri, 19 Apr 2019 12:42:02 -0500
+
+libfabric (1.6.2-23-1ifs+deb8) jessie; urgency=medium
+
+  * Import libfabric 1.6.2-23 from IFS RHEL76 10.9.1.0.15 upstream.
+
+ -- Brian T. Smith <bsmith@systemfabricworks.com>  Thu, 07 Mar 2019 17:27:36 -0600
+
+libfabric (1.6.0-80-1ifs+deb8) jessie; urgency=medium
+
+  * Import libfabric 1.6.0-80 from IFS RHEL75 10.8.0.0.204 upstream.
+
+ -- Brian T. Smith <bsmith@systemfabricworks.com>  Tue, 02 Oct 2018 16:22:30 -0500
+
+libfabric (1.5.2-61-1ifs+deb8) jessie; urgency=medium
+
+  * Import libfabric 1.5.2-61 from IFS RHEL74 10.7.0.0.145 upstream.
+
+ -- Brian T. Smith <bsmith@systemfabricworks.com>  Thu, 24 May 2018 13:26:01 -0500
+
+libfabric (1.5.0-0-1ifs) jessie; urgency=medium
+
+  * Import libfabric 1.5.0-0 from IFS 10.6.0.0.134 upstream.
+  * First debianization.
+
+ -- Brian T. Smith <bsmith@systemfabricworks.com>  Mon, 23 Oct 2017 14:52:01 -0500
+
