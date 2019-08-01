@@ -1,9 +1,11 @@
 Source: libfabric
-Maintainer: Brian T. Smith <bsmith@systemfabricworks.com>
+Maintainer: Scibian Project <packaging@scibian.org>
 Section: libs
 Priority: extra
 Standards-Version: 3.9.8
 Homepage: https://ofiwg.github.io/libfabric/
+Vcs-Git: https://github.com/scibian/libfabric.git
+Vcs-Browser: https://github.com/scibian/libfabric
 Build-Depends: autoconf,
                automake,
                debhelper (>= 10),
