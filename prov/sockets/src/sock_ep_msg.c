@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2014 Intel Corporation, Inc.  All rights reserved.
+ * Copyright (c) 2017 DataDirect Networks, Inc. All rights reserved.
  *
  * This software is available to you under a choice of one of two
  * licenses.  You may choose to be licensed under the terms of the GNU
@@ -73,7 +74,7 @@ static const struct fi_ep_attr sock_msg_ep_attr = {
 };
 
 static const struct fi_tx_attr sock_msg_tx_attr = {
-	.caps = SOCK_EP_MSG_CAP,
+	.caps = SOCK_EP_MSG_CAP_BASE,
 	.mode = SOCK_MODE,
 	.op_flags = SOCK_EP_DEFAULT_OP_FLAGS,
 	.msg_order = SOCK_EP_MSG_ORDER,
@@ -84,7 +85,7 @@ static const struct fi_tx_attr sock_msg_tx_attr = {
 };
 
 static const struct fi_rx_attr sock_msg_rx_attr = {
-	.caps = SOCK_EP_MSG_CAP,
+	.caps = SOCK_EP_MSG_CAP_BASE,
 	.mode = SOCK_MODE,
 	.op_flags = 0,
 	.msg_order = SOCK_EP_MSG_ORDER,
@@ -148,9 +149,9 @@ static int sock_msg_verify_tx_attr(const struct fi_tx_attr *attr)
 	return 0;
 }
 
-int sock_msg_verify_ep_attr(struct fi_ep_attr *ep_attr,
-			    struct fi_tx_attr *tx_attr,
-			    struct fi_rx_attr *rx_attr)
+int sock_msg_verify_ep_attr(const struct fi_ep_attr *ep_attr,
+			    const struct fi_tx_attr *tx_attr,
+			    const struct fi_rx_attr *rx_attr)
 {
 	if (ep_attr) {
 		switch (ep_attr->protocol) {
@@ -190,6 +191,10 @@ int sock_msg_verify_ep_attr(struct fi_ep_attr *ep_attr,
 		if ((ep_attr->rx_ctx_cnt > SOCK_EP_MAX_RX_CNT) &&
 		    ep_attr->rx_ctx_cnt != FI_SHARED_CONTEXT)
 			return -FI_ENODATA;
+
+		if (ep_attr->auth_key_size &&
+		    (ep_attr->auth_key_size != sock_msg_ep_attr.auth_key_size))
+			return -FI_ENODATA;
 	}
 
 	if (sock_msg_verify_tx_attr(tx_attr) || sock_msg_verify_rx_attr(rx_attr))
@@ -198,10 +203,10 @@ int sock_msg_verify_ep_attr(struct fi_ep_attr *ep_attr,
 	return 0;
 }
 
-int sock_msg_fi_info(void *src_addr, void *dest_addr, struct fi_info *hints,
-		     struct fi_info **info)
+int sock_msg_fi_info(uint32_t version, void *src_addr, void *dest_addr,
+		     const struct fi_info *hints, struct fi_info **info)
 {
-	*info = sock_fi_info(FI_EP_MSG, hints, src_addr, dest_addr);
+	*info = sock_fi_info(version, FI_EP_MSG, hints, src_addr, dest_addr);
 	if (!*info)
 		return -FI_ENOMEM;
 
@@ -281,8 +286,8 @@ static int sock_pep_create_listener(struct sock_pep *pep)
 	struct sockaddr_in addr;
 	struct addrinfo *s_res = NULL, *p;
 	struct addrinfo hints;
-	char sa_ip[INET_ADDRSTRLEN] = {0};
-	char sa_port[NI_MAXSERV] = {0};
+	char sa_ip[INET_ADDRSTRLEN];
+	char sa_port[NI_MAXSERV];
 
 	pep->cm.do_listen = 1;
 	memset(&hints, 0, sizeof(hints));
@@ -292,6 +297,8 @@ static int sock_pep_create_listener(struct sock_pep *pep)
 
 	memcpy(sa_ip, inet_ntoa(pep->src_addr.sin_addr), INET_ADDRSTRLEN);
 	sprintf(sa_port, "%d", ntohs(pep->src_addr.sin_port));
+	sa_ip[INET_ADDRSTRLEN - 1] = '\0';
+	sa_port[NI_MAXSERV - 1] = '\0';
 
 	ret = getaddrinfo(sa_ip, sa_port, &hints, &s_res);
 	if (ret) {
@@ -302,13 +309,14 @@ static int sock_pep_create_listener(struct sock_pep *pep)
 
 	SOCK_LOG_DBG("binding pep listener to %s\n", sa_port);
 	for (p = s_res; p; p = p->ai_next) {
-		pep->cm.sock = socket(p->ai_family, p->ai_socktype,
+		pep->cm.sock = ofi_socket(p->ai_family, p->ai_socktype,
 				     p->ai_protocol);
 		if (pep->cm.sock >= 0) {
-			sock_set_sockopts(pep->cm.sock);
+			sock_set_sockopts(pep->cm.sock, SOCK_OPTS_NONBLOCK);
 			if (!bind(pep->cm.sock, s_res->ai_addr, s_res->ai_addrlen))
 				break;
-			SOCK_LOG_ERROR("failed to bind listener: %s\n", strerror(errno));
+			SOCK_LOG_ERROR("failed to bind listener: %s\n",
+				       strerror(ofi_sockerr()));
 			ofi_close_socket(pep->cm.sock);
 			pep->cm.sock = -1;
 		}
@@ -316,11 +324,11 @@ static int sock_pep_create_listener(struct sock_pep *pep)
 
 	freeaddrinfo(s_res);
 	if (pep->cm.sock < 0) {
-		SOCK_LOG_ERROR("failed to create listener: %s\n", strerror(errno));
+		SOCK_LOG_ERROR("failed to create listener: %s\n",
+			       strerror(ofi_sockerr()));
 		return -FI_EIO;
 	}
 
-	sock_set_sockopt_reuseaddr(pep->cm.sock);
 	if (pep->src_addr.sin_port == 0) {
 		addr_size = sizeof(addr);
 		if (getsockname(pep->cm.sock, (struct sockaddr *)&addr, &addr_size))
@@ -336,8 +344,9 @@ static int sock_pep_create_listener(struct sock_pep *pep)
 	}
 
 	if (listen(pep->cm.sock, sock_cm_def_map_sz)) {
-		SOCK_LOG_ERROR("failed to listen socket: %s\n", strerror(errno));
-		return -errno;
+		SOCK_LOG_ERROR("failed to listen socket: %s\n",
+			       strerror(ofi_sockerr()));
+		return -ofi_sockerr();
 	}
 
 	pep->name_set = 1;
@@ -358,7 +367,7 @@ static int sock_ep_cm_setname(fid_t fid, void *addr, size_t addrlen)
 	case FI_CLASS_EP:
 	case FI_CLASS_SEP:
 		sock_ep = container_of(fid, struct sock_ep, ep.fid);
-		if (sock_ep->attr->listener.listener_thread)
+		if (sock_ep->attr->conn_handle.do_listen)
 			return -FI_EINVAL;
 		memcpy(sock_ep->attr->src_addr, addr, addrlen);
 		return sock_conn_listen(sock_ep->attr);
@@ -372,7 +381,6 @@ static int sock_ep_cm_setname(fid_t fid, void *addr, size_t addrlen)
 		SOCK_LOG_ERROR("Invalid argument\n");
 		return -FI_EINVAL;
 	}
-	return 0;
 }
 
 static int sock_ep_cm_getpeer(struct fid_ep *ep, void *addr, size_t *addrlen)
@@ -390,12 +398,15 @@ static int sock_ep_cm_getpeer(struct fid_ep *ep, void *addr, size_t *addrlen)
 static int sock_cm_send(int fd, const void *buf, int len)
 {
 	int ret, done = 0;
+
 	while (done != len) {
-		ret = ofi_write_socket(fd, (const char*) buf + done, len - done);
+		ret = ofi_send_socket(fd, (const char*) buf + done,
+				      len - done, MSG_NOSIGNAL);
 		if (ret < 0) {
-			if (errno == EAGAIN || errno == EWOULDBLOCK)
+			if (OFI_SOCK_TRY_SND_RCV_AGAIN(ofi_sockerr()))
 				continue;
-			SOCK_LOG_ERROR("failed to write to fd: %s\n", strerror(errno));
+			SOCK_LOG_ERROR("failed to write to fd: %s\n",
+				       strerror(ofi_sockerr()));
 			return -FI_EIO;
 		}
 		done += ret;
@@ -407,11 +418,12 @@ static int sock_cm_recv(int fd, void *buf, int len)
 {
 	int ret, done = 0;
 	while (done != len) {
-		ret = recv(fd, (char*) buf + done, len - done, 0);
+		ret = ofi_recv_socket(fd, (char*) buf + done, len - done, 0);
 		if (ret <= 0) {
-			if (errno == EAGAIN || errno == EWOULDBLOCK)
+			if (ret < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
 				continue;
-			SOCK_LOG_ERROR("failed to read from fd: %s\n", strerror(errno));
+			SOCK_LOG_ERROR("failed to read from fd: %s\n",
+				       strerror(ofi_sockerr()));
 			return -FI_EIO;
 		}
 		done += ret;
@@ -491,18 +503,21 @@ static void *sock_ep_cm_connect_handler(void *data)
 	struct fi_eq_cm_entry *cm_entry = NULL;
 	int cm_data_sz, response_port;
 
-	sock_fd = socket(AF_INET, SOCK_STREAM, 0);
+	sock_fd = ofi_socket(AF_INET, SOCK_STREAM, 0);
 	if (sock_fd < 0) {
 		SOCK_LOG_ERROR("no socket\n");
 		sock_ep_cm_report_connect_fail(handle->ep, NULL, 0);
 		goto out;
 	}
 
-	sock_set_sockopts_conn(sock_fd);
+	ofi_straddr_dbg(&sock_prov, FI_LOG_EP_CTRL, "Connecting to address",
+			&handle->dest_addr);
+	sock_set_sockopts(sock_fd, SOCK_OPTS_KEEPALIVE);
 	ret = connect(sock_fd, (struct sockaddr *)&handle->dest_addr,
 		      sizeof(handle->dest_addr));
 	if (ret < 0) {
-		SOCK_LOG_ERROR("connect failed : %s\n", strerror(errno));
+		SOCK_LOG_ERROR("connect failed : %s\n",
+			       strerror(ofi_sockerr()));
 		goto err;
 	}
 
@@ -549,7 +564,7 @@ static void *sock_ep_cm_connect_handler(void *data)
 	}
 	goto out;
 err:
-	SOCK_LOG_ERROR("io failed : %s\n", strerror(errno));
+	SOCK_LOG_ERROR("io failed : %s\n", strerror(ofi_sockerr()));
 	sock_ep_cm_report_connect_fail(handle->ep, NULL, 0);
 	ofi_close_socket(sock_fd);
 out:
@@ -573,7 +588,7 @@ static int sock_ep_cm_connect(struct fid_ep *ep, const void *addr,
 	if (!_eq || !addr || (paramlen > SOCK_EP_MAX_CM_DATA_SZ))
 		return -FI_EINVAL;
 
-	if (!_ep->attr->listener.listener_thread && sock_conn_listen(_ep->attr))
+	if (!_ep->attr->conn_handle.do_listen && sock_conn_listen(_ep->attr))
 		return -FI_EINVAL;
 
 	if (!_ep->attr->dest_addr) {
@@ -672,7 +687,7 @@ static int sock_ep_cm_accept(struct fid_ep *ep, const void *param, size_t paraml
 	if (!_ep->attr->eq || paramlen > SOCK_EP_MAX_CM_DATA_SZ)
 		return -FI_EINVAL;
 
-	if (!_ep->attr->listener.listener_thread && sock_conn_listen(_ep->attr))
+	if (!_ep->attr->conn_handle.do_listen && sock_conn_listen(_ep->attr))
 		return -FI_EINVAL;
 
 	handle = container_of(_ep->attr->info.handle,
@@ -741,6 +756,7 @@ struct fi_ops_cm sock_ep_cm_ops = {
 	.accept = sock_ep_cm_accept,
 	.reject = fi_no_reject,
 	.shutdown = sock_ep_cm_shutdown,
+	.join = fi_no_join,
 };
 
 static int sock_msg_endpoint(struct fid_domain *domain, struct fi_info *info,
@@ -873,8 +889,8 @@ static struct fi_info *sock_ep_msg_get_info(struct sock_pep *pep,
 
 	hints = pep->info;
 	hints.caps = req->caps;
-	return sock_fi_info(FI_EP_MSG, &hints,
-			    &pep->src_addr, &req->src_addr);
+	return sock_fi_info(pep->sock_fab->fab_fid.api_version, FI_EP_MSG,
+			    &hints, &pep->src_addr, &req->src_addr);
 }
 
 static void *sock_pep_req_handler(void *data)
@@ -1016,11 +1032,11 @@ static void *sock_pep_listener_thread(void *data)
 
 		conn_fd = accept(pep->cm.sock, NULL, 0);
 		if (conn_fd < 0) {
-			SOCK_LOG_ERROR("failed to accept: %d\n", errno);
+			SOCK_LOG_ERROR("failed to accept: %d\n", ofi_sockerr());
 			continue;
 		}
 
-		sock_set_sockopts_conn(conn_fd);
+		sock_set_sockopts(conn_fd, SOCK_OPTS_KEEPALIVE);
 		handle = calloc(1, sizeof(*handle));
 		if (!handle) {
 			SOCK_LOG_ERROR("cannot allocate memory\n");
@@ -1108,7 +1124,9 @@ static struct fi_ops_cm sock_pep_cm_ops = {
 	.accept = fi_no_accept,
 	.reject = sock_pep_reject,
 	.shutdown = fi_no_shutdown,
+	.join = fi_no_join,
 };
+
 
 int sock_pep_getopt(fid_t fid, int level, int optname,
 		      void *optval, size_t *optlen)
@@ -1157,7 +1175,7 @@ int sock_msg_passive_ep(struct fid_fabric *fabric, struct fi_info *info,
 	struct addrinfo hints, *result;
 
 	if (info) {
-		ret = sock_verify_info(info);
+		ret = sock_verify_info(fabric->api_version, info);
 		if (ret) {
 			SOCK_LOG_DBG("Cannot support requested options!\n");
 			return ret;
@@ -1195,7 +1213,7 @@ int sock_msg_passive_ep(struct fid_fabric *fabric, struct fi_info *info,
 
 	ret = socketpair(AF_UNIX, SOCK_STREAM, 0, _pep->cm.signal_fds);
 	if (ret) {
-		ret = -errno;
+		ret = -ofi_sockerr();
 		goto err;
 	}
 

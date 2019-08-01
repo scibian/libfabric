@@ -63,16 +63,14 @@ struct fi_ibv_msg_ep;
 #define FI_IBV_RDM_DFLT_ADDRLEN	(sizeof (struct sockaddr_in))
 
 #define FI_IBV_RDM_CM_THREAD_TIMEOUT (100)
-#define FI_IBV_RDM_MEM_ALIGNMENT (64)
-#define FI_IBV_RDM_BUF_ALIGNMENT (4096) /* TODO: Page or MTU size */
 
 #define FI_IBV_RDM_TAGGED_DFLT_BUFFER_NUM (8)
 #define FI_IBV_RDM_DFLT_CQREAD_BUNCH_SIZE (FI_IBV_RDM_TAGGED_DFLT_BUFFER_NUM)
 
 #define FI_IBV_RDM_DFLT_BUFFER_SIZE					\
-	(3 * FI_IBV_RDM_BUF_ALIGNMENT)
+	(3 * FI_IBV_BUF_ALIGNMENT)
 
-#define FI_IBV_RDM_DFLT_BUFFERED_SSIZE					\
+#define FI_IBV_RDM_DFLT_BUFFERED_SIZE					\
 	(FI_IBV_RDM_DFLT_BUFFER_SIZE -					\
 	 FI_IBV_RDM_BUFF_SERVICE_DATA_SIZE -				\
 	 sizeof(struct fi_ibv_rdm_header))
@@ -83,8 +81,13 @@ struct fi_ibv_msg_ep;
  */
 size_t rdm_buffer_size(size_t buf_send_size);
 
+#ifdef HAVE_VERBS_EXP_H
+/* 128MB is ODP MR limitation */
+#define FI_IBV_RDM_SEG_MAXSIZE (128*1024*1024)
+#else /* HAVE_VERBS_EXP_H */
 /* 1GB is RC_QP limitation */
 #define FI_IBV_RDM_SEG_MAXSIZE (1024*1024*1024)
+#endif /* HAVE_VERBS_EXP_H */
 
 /* TODO: CQs depths increased from 100 to 1000 to prevent
  *      "Work Request Flushed Error" in stress tests like alltoall.
@@ -122,19 +125,20 @@ do {										\
 	const size_t max_str_len = 1024;					\
 	char str[max_str_len];							\
 	snprintf(str, max_str_len,						\
-		"%s request: %p, eager_state: %s, rndv_state: %s,"		\
-		" err_state: %ld, tag: 0x%lx, len: %lu, rest: %lu,"		\
-		"context: %p, connection: %p\n",				\
-		prefix,								\
-		request,							\
-		fi_ibv_rdm_req_eager_state_to_str(request->state.eager),	\
-		fi_ibv_rdm_req_rndv_state_to_str(request->state.rndv),		\
-		request->state.err,						\
-		request->minfo.tag,						\
-		request->len,							\
-		request->rest_len,						\
-		request->context,						\
-		request->minfo.conn);						\
+		 "%s request: %p, eager_state: %s, rndv_state: %s,"		\
+		 " err_state: %ld, tag: 0x%lx, len: %lu, rest: %lu,"		\
+		 "context: %p, connection: %p ep: %p\n",			\
+		 prefix,							\
+		 request,							\
+		 fi_ibv_rdm_req_eager_state_to_str(request->state.eager),	\
+		 fi_ibv_rdm_req_rndv_state_to_str(request->state.rndv),		\
+		 request->state.err,						\
+		 request->minfo.tag,						\
+		 request->len,							\
+		 request->rest_len,						\
+		 request->context,						\
+		 request->minfo.conn,						\
+		 request->ep);							\
 										\
 	switch (level)								\
 	{									\
@@ -170,7 +174,7 @@ struct fi_ibv_rdm_tagged_peek_data {
 };
 
 struct fi_ibv_rdm_cm;
-struct fi_ibv_rdm_request *request;
+struct fi_ibv_rdm_request;
 struct fi_ibv_rdm_send_start_data;
 
 int fi_ibv_rdm_req_match(struct dlist_entry *item, const void *other);

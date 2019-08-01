@@ -1,5 +1,8 @@
 /* config.h.in.  Generated from configure.ac by autoheader.  */
 
+/* adds build_id to version if it was defined */
+#undef BUILD_ID
+
 /* defined to 1 if libfabric was configured with --enable-debug, 0 otherwise
    */
 #undef ENABLE_DEBUG
@@ -13,8 +16,23 @@
 /* Set to 1 to use c11 atomic functions */
 #undef HAVE_ATOMICS
 
-/* Define to 1 if clock_gettime is available. */
-#undef HAVE_CLOCK_GETTIME
+/* Set to 1 to use c11 atomic `least` types */
+#undef HAVE_ATOMICS_LEAST_TYPES
+
+/* bgq provider is built */
+#undef HAVE_BGQ
+
+/* bgq provider is built as DSO */
+#undef HAVE_BGQ_DL
+
+/* Set to 1 to use built-in intrincics atomics */
+#undef HAVE_BUILTIN_ATOMICS
+
+/* Set to 1 to to use cpuid */
+#undef HAVE_CPUID
+
+/* Define to 1 if criterion requested and available */
+#undef HAVE_CRITERION
 
 /* Define to 1 if you have the <dlfcn.h> header file. */
 #undef HAVE_DLFCN_H
@@ -28,6 +46,9 @@
 /* Define to 1 if you have the `getifaddrs' function. */
 #undef HAVE_GETIFADDRS
 
+/* Set to 1 to use glibc malloc hooks */
+#undef HAVE_GLIBC_MALLOC_HOOKS
+
 /* gni provider is built */
 #undef HAVE_GNI
 
@@ -37,14 +58,17 @@
 /* gni provider is built as DSO */
 #undef HAVE_GNI_DL
 
-/* Define to 1 if you have the `host_get_clock_service' function. */
-#undef HAVE_HOST_GET_CLOCK_SERVICE
+/* Define to 1 if you have the <infiniband/verbs_exp.h> header file. */
+#undef HAVE_INFINIBAND_VERBS_EXP_H
 
 /* Define to 1 if you have the <infiniband/verbs.h> header file. */
 #undef HAVE_INFINIBAND_VERBS_H
 
 /* Define to 1 if you have the <inttypes.h> header file. */
 #undef HAVE_INTTYPES_H
+
+/* Define to 1 if kdreg available */
+#undef HAVE_KDREG
 
 /* Define to 1 if you have the `dl' library (-ldl). */
 #undef HAVE_LIBDL
@@ -55,17 +79,18 @@
 /* Define to 1 if you have the `pthread' library (-lpthread). */
 #undef HAVE_LIBPTHREAD
 
+/* Whether we have __builtin_ia32_rdpmc() and linux/perf_event.h file or not
+   */
+#undef HAVE_LINUX_PERF_RDPMC
+
 /* Define to 1 if you have the <memory.h> header file. */
 #undef HAVE_MEMORY_H
 
-/* mxm provider is built */
-#undef HAVE_MXM
+/* mlx provider is built */
+#undef HAVE_MLX
 
-/* Define to 1 if you have the <mxm/api/mxm_api.h> header file. */
-#undef HAVE_MXM_API_MXM_API_H
-
-/* mxm provider is built as DSO */
-#undef HAVE_MXM_DL
+/* mlx provider is built as DSO */
+#undef HAVE_MLX_DL
 
 /* Define to 1 if you have the <netlink/netlink.h> header file. */
 #undef HAVE_NETLINK_NETLINK_H
@@ -73,11 +98,17 @@
 /* Define to 1 if you have the <netlink/version.h> header file. */
 #undef HAVE_NETLINK_VERSION_H
 
+/* Define to 1 if you have the <numa.h> header file. */
+#undef HAVE_NUMA_H
+
 /* psm provider is built */
 #undef HAVE_PSM
 
 /* psm2 provider is built */
 #undef HAVE_PSM2
+
+/* psm2_am_register_handlers_2 function is present */
+#undef HAVE_PSM2_AM_REGISTER_HANDLERS_2
 
 /* psm2 provider is built as DSO */
 #undef HAVE_PSM2_DL
@@ -85,14 +116,20 @@
 /* Define to 1 if you have the <psm2.h> header file. */
 #undef HAVE_PSM2_H
 
+/* psm2_mq_fp_msg function is present */
+#undef HAVE_PSM2_MQ_FP_MSG
+
+/* PSM2 source is built-in */
+#undef HAVE_PSM2_SRC
+
 /* psm provider is built as DSO */
 #undef HAVE_PSM_DL
 
 /* Define to 1 if you have the <psm.h> header file. */
 #undef HAVE_PSM_H
 
-/* Define to 1 if you have the <rdma/rsocket.h> header file. */
-#undef HAVE_RDMA_RSOCKET_H
+/* Define to 1 if you have the <rdma/rdma_cma.h> header file. */
+#undef HAVE_RDMA_RDMA_CMA_H
 
 /* rxd provider is built */
 #undef HAVE_RXD
@@ -105,6 +142,12 @@
 
 /* rxm provider is built as DSO */
 #undef HAVE_RXM_DL
+
+/* shm provider is built */
+#undef HAVE_SHM
+
+/* shm provider is built as DSO */
+#undef HAVE_SHM_DL
 
 /* sockets provider is built */
 #undef HAVE_SOCKETS
@@ -136,8 +179,17 @@
 /* Define to 1 if you have the <sys/types.h> header file. */
 #undef HAVE_SYS_TYPES_H
 
+/* tcp provider is built */
+#undef HAVE_TCP
+
+/* tcp provider is built as DSO */
+#undef HAVE_TCP_DL
+
 /* Define to 1 if typeof works with your compiler. */
 #undef HAVE_TYPEOF
+
+/* Define to 1 if you have the <ucp/api/ucp.h> header file. */
+#undef HAVE_UCP_API_UCP_H
 
 /* udp provider is built */
 #undef HAVE_UDP
@@ -160,18 +212,17 @@
 /* verbs provider is built as DSO */
 #undef HAVE_VERBS_DL
 
+/* Experimental verbs features support */
+#undef HAVE_VERBS_EXP_H
+
 /* Define to 1 if xpmem available */
 #undef HAVE_XPMEM
 
 /* Define to 1 to enable valgrind annotations */
 #undef INCLUDE_VALGRIND
 
-/* Define to the sub-directory in which libtool stores uninstalled libraries.
-   */
+/* Define to the sub-directory where libtool stores uninstalled libraries. */
 #undef LT_OBJDIR
-
-/* Define to 1 if your C compiler doesn't accept -c and -o together. */
-#undef NO_MINUS_C_MINUS_O
 
 /* Name of package */
 #undef PACKAGE
@@ -199,6 +250,9 @@
 
 /* Define to 1 if you have the ANSI C header files. */
 #undef STDC_HEADERS
+
+/* Whether to build the fake usNIC verbs provider or not */
+#undef USNIC_BUILD_FAKE_VERBS_DRIVER
 
 /* Version number of package */
 #undef VERSION
