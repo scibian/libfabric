@@ -1,3 +1,9 @@
+libfabric (1.4.0-1sci9+opa10.9u1) scibian9+opa10.9; urgency=medium
+
+  * Rebuild for opa 10.9 .
+
+ -- MHamed Bouaziz <mhamed-externe.bouaziz@edf.fr>  Fri, 16 Aug 2019 15:57:35 +0200
+
 libfabric (1.4.0-1sci9+opa10.7u3) scibian9; urgency=medium
 
   * Patch psm2 provider initialization to support pmix There was poor communication performance when PMIX was used and 'couldn't listen to port 64256' messages were oberved when setting FI_LOG_LEVEL to debug.
