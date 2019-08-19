@@ -1,0 +1,12 @@
+Disable psmx2_env name_server when PMIX_RANK is set.
+--- a/prov/psm2/src/psmx2_init.c
++++ b/prov/psm2/src/psmx2_init.c
+@@ -47,7 +47,7 @@
+ 
+ static void psmx2_init_env(void)
+ {
+-	if (getenv("OMPI_COMM_WORLD_RANK") || getenv("PMI_RANK"))
++	if (getenv("OMPI_COMM_WORLD_RANK") || getenv("PMI_RANK") || getenv("PMIX_RANK"))
+ 		psmx2_env.name_server = 0;
+ 
+ 	fi_param_get_bool(&psmx2_prov, "name_server", &psmx2_env.name_server);

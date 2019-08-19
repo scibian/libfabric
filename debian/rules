@@ -5,8 +5,29 @@ include /usr/share/dpkg/pkg-info.mk
 
 export DEB_BUILD_MAINT_OPTIONS = hardening=+all
 
+EXTRAFLAGS :=
+ifeq (amd64,$(DEB_HOST_ARCH))
+  EXTRAFLAGS := --enable-psm2=yes
+endif
+
+configure_providers = \
+	--enable-psm=yes \
+	--enable-sockets=yes \
+	--enable-verbs=yes \
+	--enable-usnic=no \
+	--enable-mlx=no \
+	--enable-gni=no \
+	--enable-udp=yes \
+	--enable-rxm=no \
+	--enable-rxd=no \
+	--enable-bgq=no \
+	$(EXTRAFLAGS)
+
 %:
 	dh $@ --parallel --with autoreconf
+
+override_dh_auto_configure:
+	dh_auto_configure -- $(configure_providers)
 
 override_dh_strip:
 	dh_strip --dbg-package=libfabric1-dbg
