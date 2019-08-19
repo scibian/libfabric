@@ -32,37 +32,34 @@
 
 #include <rdma/fi_errno.h>
 
-#include <ofi_prov.h>
+#include <prov.h>
 #include "rxd.h"
 
-int rxd_info_to_core(uint32_t version, const struct fi_info *rxd_info,
-		     struct fi_info *core_info)
+int rxd_alter_layer_info(struct fi_info *layer_info, struct fi_info *base_info)
 {
-	core_info->caps = FI_MSG;
-	core_info->mode = FI_LOCAL_MR;
-	core_info->ep_attr->type = FI_EP_DGRAM;
+	base_info->caps = FI_MSG;
+	base_info->mode = FI_LOCAL_MR;
+	base_info->ep_attr->type = FI_EP_DGRAM;
 	return 0;
 }
 
-int rxd_info_to_rxd(uint32_t version, const struct fi_info *core_info,
-		    struct fi_info *info)
+int rxd_alter_base_info(struct fi_info *base_info, struct fi_info *layer_info)
 {
-	info->caps = rxd_info.caps;
-	info->mode = rxd_info.mode;
+	layer_info->caps = rxd_info.caps;
+	layer_info->mode = rxd_info.mode;
 
-	*info->tx_attr = *rxd_info.tx_attr;
-	*info->rx_attr = *rxd_info.rx_attr;
-	*info->ep_attr = *rxd_info.ep_attr;
-	*info->domain_attr = *rxd_info.domain_attr;
+	*layer_info->tx_attr = *rxd_info.tx_attr;
+	*layer_info->rx_attr = *rxd_info.rx_attr;
+	*layer_info->ep_attr = *rxd_info.ep_attr;
+	*layer_info->domain_attr = *rxd_info.domain_attr;
 	return 0;
 }
 
 static int rxd_getinfo(uint32_t version, const char *node, const char *service,
-			uint64_t flags, const struct fi_info *hints,
-			struct fi_info **info)
+			uint64_t flags, struct fi_info *hints, struct fi_info **info)
 {
 	return ofix_getinfo(version, node, service, flags, &rxd_util_prov,
-			    hints, rxd_info_to_core, rxd_info_to_rxd, info);
+			    hints, rxd_alter_layer_info, rxd_alter_base_info, 0, info);
 }
 
 static void rxd_fini(void)
@@ -71,7 +68,7 @@ static void rxd_fini(void)
 }
 
 struct fi_provider rxd_prov = {
-	.name = OFI_UTIL_PREFIX "rxd",
+	.name = "rxd",
 	.version = FI_VERSION(RXD_MAJOR_VERSION, RXD_MINOR_VERSION),
 	.fi_version = RXD_FI_VERSION,
 	.getinfo = rxd_getinfo,
@@ -81,8 +78,5 @@ struct fi_provider rxd_prov = {
 
 RXD_INI
 {
-	fi_param_define(&rxd_prov, "spin_count", FI_PARAM_INT,
-			"Number of iterations to receive packets (0 - infinite)");
-
 	return &rxd_prov;
 }

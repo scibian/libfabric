@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2015-2018 Cray Inc. All rights reserved.
- * Copyright (c) 2015-2018 Los Alamos National Security, LLC.
+ * Copyright (c) 2015-2016 Cray Inc. All rights reserved.
+ * Copyright (c) 2015-2016 Los Alamos National Security, LLC.
  *                         All rights reserved.
  *
  * This software is available to you under a choice of one of two
@@ -43,18 +43,10 @@
 #include "gnix_cm_nic.h"
 #include "gnix_vc.h"
 #include "gnix_mbox_allocator.h"
-#include "gnix_util.h"
 
-/*
- * TODO: make this a domain parameter
- */
-#define GNIX_VC_FL_MIN_SIZE 128
-#define GNIX_VC_FL_INIT_REFILL_SIZE 10
-
-static int gnix_nics_per_ptag[GNI_PTAG_MAX];
-struct dlist_entry gnix_nic_list_ptag[GNI_PTAG_MAX];
-DLIST_HEAD(gnix_nic_list);
-pthread_mutex_t gnix_nic_list_lock = PTHREAD_MUTEX_INITIALIZER;
+static int gnix_nics_per_ptag[GNI_PTAG_USER_END];
+static DLIST_HEAD(gnix_nic_list);
+static pthread_mutex_t gnix_nic_list_lock = PTHREAD_MUTEX_INITIALIZER;
 
 /*
  * globals
@@ -151,24 +143,23 @@ try_again:
 		/*
 		 * first dequeue RX CQEs
 		 */
-		if (nic->rx_cq_blk != nic->rx_cq && which == 1) {
+		if (which == 1) {
 			do {
 				status = GNI_CqGetEvent(nic->rx_cq_blk,
 							&cqe);
 			} while (status == GNI_RC_SUCCESS);
 		}
-		pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &prev_state);
 		_gnix_nic_progress(nic);
-		pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, &prev_state);
 		retry = 1;
 		break;
 	case GNI_RC_TIMEOUT:
+		retry = 1;
+		break;
 	case GNI_RC_NOT_DONE:
-        /* Invalid state indicates call interrupted by signal using various tools */
-	case GNI_RC_INVALID_STATE:
 		retry = 1;
 		break;
 	case GNI_RC_INVALID_PARAM:
+	case GNI_RC_INVALID_STATE:
 	case GNI_RC_ERROR_RESOURCE:
 	case GNI_RC_ERROR_NOMEM:
 		retry = 0;
@@ -201,9 +192,6 @@ static int __nic_setup_irq_cq(struct gnix_nic *nic)
 	gni_return_t status;
 	int fd = -1;
 	void *mmap_addr;
-	int vmdh_index = -1;
-	int flags = GNI_MEM_READWRITE;
-	struct gnix_auth_key *info;
 
 	len = (size_t)sysconf(_SC_PAGESIZE);
 
@@ -219,52 +207,12 @@ static int __nic_setup_irq_cq(struct gnix_nic *nic)
 	nic->irq_mmap_addr = mmap_addr;
 	nic->irq_mmap_len = len;
 
-	/* On some systems, the page may not be zero'd from first use.
-		 Memset it here */
-	memset(mmap_addr, 0x0, len);
-
-	if (nic->using_vmdh) {
-		info = _gnix_auth_key_lookup(GNIX_PROV_DEFAULT_AUTH_KEY,
-				GNIX_PROV_DEFAULT_AUTH_KEYLEN);
-		assert(info);
-
-		if (!nic->mdd_resources_set) {
-			/* check to see if the ptag registration limit was set
-			   yet or not -- becomes read-only after success */
-			ret = _gnix_auth_key_enable(info);
-			if (ret != FI_SUCCESS && ret != -FI_EBUSY) {
-				GNIX_WARN(FI_LOG_DOMAIN,
-					"failed to enable authorization key, "
-					"unexpected error rc=%d\n", ret);
-			}
-
-			status = GNI_SetMddResources(nic->gni_nic_hndl,
-					(info->attr.prov_key_limit +
-					info->attr.user_key_limit));
-			if (status != GNI_RC_SUCCESS) {
-				GNIX_FATAL(FI_LOG_DOMAIN,
-					"failed to set MDD resources, rc=%d\n",
-					status);
-			}
-
-			nic->mdd_resources_set = 1;
-		}
-		vmdh_index = _gnix_get_next_reserved_key(info);
-		if (vmdh_index <= 0) {
-			GNIX_FATAL(FI_LOG_DOMAIN,
-				"failed to get next reserved key, "
-				"rc=%d\n", vmdh_index);
-		}
-
-		flags |= GNI_MEM_USE_VMDH;
-	}
-
 	status = GNI_MemRegister(nic->gni_nic_hndl,
 				(uint64_t) nic->irq_mmap_addr,
 				len,
 				nic->rx_cq_blk,
-				flags,
-				vmdh_index,
+				GNI_MEM_READWRITE,
+				-1,
 				 &nic->irq_mem_hndl);
 	if (status != GNI_RC_SUCCESS) {
 		ret = gnixu_to_fi_errno(status);
@@ -304,16 +252,13 @@ static int __nic_teardown_irq_cq(struct gnix_nic *nic)
 	if (nic->irq_mmap_addr == NULL)
 		return ret;
 
-	if ((nic->irq_mem_hndl.qword1) ||
-		(nic->irq_mem_hndl.qword2)) {
-		status = GNI_MemDeregister(nic->gni_nic_hndl,
-					  &nic->irq_mem_hndl);
-		if (status != GNI_RC_SUCCESS) {
-			ret = gnixu_to_fi_errno(status);
-			GNIX_WARN(FI_LOG_EP_CTRL,
-				  "GNI_MemDeregister returned %s\n",
-				  gni_err_str[status]);
-		}
+	status = GNI_MemDeregister(nic->gni_nic_hndl,
+				  &nic->irq_mem_hndl);
+	if (status != GNI_RC_SUCCESS) {
+		ret = gnixu_to_fi_errno(status);
+		GNIX_WARN(FI_LOG_EP_CTRL,
+			  "GNI_MemDeregister returned %s\n",
+			  gni_err_str[status]);
 	}
 
 	munmap(nic->irq_mmap_addr,
@@ -335,7 +280,7 @@ __desc_lkup_by_id(struct gnix_nic *nic, int desc_id)
 {
 	struct gnix_tx_descriptor *tx_desc;
 
-	assert((desc_id >= 0) && (desc_id <= nic->max_tx_desc_id));
+	assert((desc_id >= 0) && (desc_id < nic->max_tx_desc_id));
 	tx_desc = &nic->tx_desc_base[desc_id];
 	return tx_desc;
 }
@@ -370,8 +315,12 @@ static int __nic_rx_overrun(struct gnix_nic *nic)
 		ret = _gnix_test_bit(&nic->vc_id_bitmap, i);
 		if (ret) {
 			vc = __gnix_nic_elem_by_rem_id(nic, i);
-			ret = _gnix_vc_rx_schedule(vc);
-			assert(ret == FI_SUCCESS);
+			ret = _gnix_vc_dequeue_smsg(vc);
+			if (ret != FI_SUCCESS) {
+				GNIX_WARN(FI_LOG_EP_DATA,
+					  "_gnix_vc_dqueue_smsg returned %d\n",
+					  ret);
+			}
 		}
 	}
 
@@ -384,34 +333,30 @@ static int __process_rx_cqe(struct gnix_nic *nic, gni_cq_entry_t cqe)
 	struct gnix_vc *vc;
 
 	vc_id =  GNI_CQ_GET_INST_ID(cqe);
-
-	/*
-	 * its possible this vc has been destroyed, so may get NULL
-	 * back.
-	 */
-
 	vc = __gnix_nic_elem_by_rem_id(nic, vc_id);
-	if (vc != NULL) {
-		switch (vc->conn_state) {
-		case GNIX_VC_CONNECTING:
-			GNIX_DEBUG(FI_LOG_EP_DATA,
-				  "Scheduling VC for RX processing (%p)\n",
-				  vc);
-			ret = _gnix_vc_rx_schedule(vc);
-			assert(ret == FI_SUCCESS);
-			break;
-		case GNIX_VC_CONNECTED:
-			GNIX_DEBUG(FI_LOG_EP_DATA,
-				  "Processing VC RX (%p)\n",
-				  vc);
-			ret = _gnix_vc_rx_schedule(vc);
-			assert(ret == FI_SUCCESS);
-			break;
-		default:
-			break;  /* VC not in a state for scheduling or
-				   SMSG processing */
+
+#if 1 /* Process RX inline with arrival of an RX CQE. */
+	if (unlikely(vc->conn_state != GNIX_VC_CONNECTED)) {
+		GNIX_DEBUG(FI_LOG_EP_DATA,
+			  "Scheduling VC for RX processing (%p)\n",
+			  vc);
+		ret = _gnix_vc_rx_schedule(vc);
+		assert(ret == FI_SUCCESS);
+	} else {
+		GNIX_DEBUG(FI_LOG_EP_DATA,
+			  "Processing VC RX (%p)\n",
+			  vc);
+		ret = _gnix_vc_dequeue_smsg(vc);
+		if (ret != FI_SUCCESS) {
+			GNIX_WARN(FI_LOG_EP_DATA,
+					"_gnix_vc_dqueue_smsg returned %d\n",
+					ret);
 		}
 	}
+#else /* Defer RX processing until after the RX CQ is cleared. */
+	ret = _gnix_vc_rx_schedule(vc);
+	assert(ret == FI_SUCCESS);
+#endif
 
 	return ret;
 }
@@ -430,12 +375,12 @@ static int __nic_rx_progress(struct gnix_nic *nic)
 
 	do {
 		status = GNI_CqGetEvent(nic->rx_cq, &cqe);
-		if (OFI_UNLIKELY(status == GNI_RC_NOT_DONE)) {
+		if (unlikely(status == GNI_RC_NOT_DONE)) {
 			ret = FI_SUCCESS;
 			break;
 		}
 
-		if (OFI_LIKELY(status == GNI_RC_SUCCESS)) {
+		if (likely(status == GNI_RC_SUCCESS)) {
 			/* Find and schedule the associated VC. */
 			ret = __process_rx_cqe(nic, cqe);
 			if (ret != FI_SUCCESS) {
@@ -516,7 +461,7 @@ static void __nic_get_completed_txd(struct gnix_nic *nic,
 	assert(status == GNI_RC_SUCCESS ||
 	       status == GNI_RC_TRANSACTION_ERROR);
 
-	if (OFI_UNLIKELY(status == GNI_RC_TRANSACTION_ERROR)) {
+	if (unlikely(status == GNI_RC_TRANSACTION_ERROR)) {
 		status = GNI_CqErrorRecoverable(cqe, &recov);
 		if (status == GNI_RC_SUCCESS) {
 			if (!recov) {
@@ -549,7 +494,7 @@ static void __nic_get_completed_txd(struct gnix_nic *nic,
 		txd_p = __desc_lkup_by_id(nic, msg_id);
 	}
 
-	if (OFI_UNLIKELY(txd_p == NULL))
+	if (unlikely(txd_p == NULL))
 		GNIX_FATAL(FI_LOG_EP_DATA, "Unexpected CQE: 0x%lx", cqe);
 
 	/*
@@ -600,18 +545,17 @@ static int __nic_tx_progress(struct gnix_nic *nic, gni_cq_handle_t cq)
 	return ret;
 }
 
-int _gnix_nic_progress(void *arg)
+int _gnix_nic_progress(struct gnix_nic *nic)
 {
-	struct gnix_nic *nic = (struct gnix_nic *)arg;
 	int ret = FI_SUCCESS;
 
 	ret =  __nic_tx_progress(nic, nic->tx_cq);
-	if (OFI_UNLIKELY(ret != FI_SUCCESS))
+	if (unlikely(ret != FI_SUCCESS))
 		return ret;
 
-	if (nic->tx_cq_blk && nic->tx_cq_blk != nic->tx_cq) {
+	if (nic->tx_cq_blk) {
 		ret =  __nic_tx_progress(nic, nic->tx_cq_blk);
-		if (OFI_UNLIKELY(ret != FI_SUCCESS))
+		if (unlikely(ret != FI_SUCCESS))
 			return ret;
 	}
 
@@ -693,6 +637,46 @@ err:
 }
 
 /*
+ * allocate a tx desc for this nic
+ */
+
+int _gnix_nic_tx_alloc(struct gnix_nic *nic,
+		       struct gnix_tx_descriptor **desc)
+{
+	struct dlist_entry *entry;
+
+	COND_ACQUIRE(nic->requires_lock, &nic->tx_desc_lock);
+	if (dlist_empty(&nic->tx_desc_free_list)) {
+		COND_RELEASE(nic->requires_lock, &nic->tx_desc_lock);
+		return -FI_ENOSPC;
+	}
+
+	entry = nic->tx_desc_free_list.next;
+	dlist_remove_init(entry);
+	dlist_insert_head(entry, &nic->tx_desc_active_list);
+	*desc = dlist_entry(entry, struct gnix_tx_descriptor, list);
+	COND_RELEASE(nic->requires_lock, &nic->tx_desc_lock);
+
+	return FI_SUCCESS;
+}
+
+/*
+ * free a tx desc for this nic - the nic is not embedded in the
+ * descriptor to help keep it small
+ */
+
+int _gnix_nic_tx_free(struct gnix_nic *nic,
+		      struct gnix_tx_descriptor *desc)
+{
+	COND_ACQUIRE(nic->requires_lock, &nic->tx_desc_lock);
+	dlist_remove_init(&desc->list);
+	dlist_insert_head(&desc->list, &nic->tx_desc_free_list);
+	COND_RELEASE(nic->requires_lock, &nic->tx_desc_lock);
+
+	return FI_SUCCESS;
+}
+
+/*
  * allocate a free list of tx descs for a gnix_nic struct.
  */
 
@@ -700,6 +684,8 @@ static int __gnix_nic_tx_freelist_init(struct gnix_nic *nic, int n_descs)
 {
 	int i, ret = FI_SUCCESS;
 	struct gnix_tx_descriptor *desc_base, *desc_ptr;
+	void *int_bufs;
+	gni_return_t status;
 
 	GNIX_TRACE(FI_LOG_EP_CTRL, "\n");
 
@@ -713,11 +699,29 @@ static int __gnix_nic_tx_freelist_init(struct gnix_nic *nic, int n_descs)
 		goto err;
 	}
 
+	int_bufs = calloc(n_descs, GNIX_CACHELINE_SIZE);
+	if (int_bufs == NULL) {
+		ret = -FI_ENOMEM;
+		goto err_buf_alloc;
+	}
+
+	/* We don't have a domain here to use for caching the registration. */
+	status = GNI_MemRegister(nic->gni_nic_hndl, (uint64_t)int_bufs,
+				 n_descs * GNIX_CACHELINE_SIZE, NULL,
+				 GNI_MEM_READWRITE, 0, &nic->int_bufs_mdh);
+	if (status != GNI_RC_SUCCESS) {
+		ret = gnixu_to_fi_errno(status);
+		goto err_buf_reg;
+	}
+	nic->int_bufs = int_bufs;
+
 	dlist_init(&nic->tx_desc_free_list);
 	dlist_init(&nic->tx_desc_active_list);
 
 	for (i = 0, desc_ptr = desc_base; i < n_descs; i++, desc_ptr++) {
 		desc_ptr->id = i;
+		desc_ptr->int_buf = (void *) ((uint8_t *) int_bufs +
+					      (i * GNIX_CACHELINE_SIZE));
 		dlist_insert_tail(&desc_ptr->list,
 				  &nic->tx_desc_free_list);
 	}
@@ -729,6 +733,10 @@ static int __gnix_nic_tx_freelist_init(struct gnix_nic *nic, int n_descs)
 
 	return ret;
 
+err_buf_reg:
+	free(int_bufs);
+err_buf_alloc:
+	free(desc_base);
 err:
 	return ret;
 
@@ -739,7 +747,15 @@ err:
  */
 static void __gnix_nic_tx_freelist_destroy(struct gnix_nic *nic)
 {
+	gni_return_t status;
+
 	GNIX_TRACE(FI_LOG_EP_CTRL, "\n");
+
+	status = GNI_MemDeregister(nic->gni_nic_hndl, &nic->int_bufs_mdh);
+	if (status != GNI_RC_SUCCESS)
+		GNIX_WARN(FI_LOG_DOMAIN, "GNI_MemDeregister() failed: %s\n",
+			  gni_err_str[status]);
+	free(nic->int_bufs);
 
 	free(nic->tx_desc_base);
 	fastlock_destroy(&nic->tx_desc_lock);
@@ -757,17 +773,6 @@ static void __nic_destruct(void *obj)
 
 	GNIX_TRACE(FI_LOG_EP_CTRL, "\n");
 
-	/* Get us out of the progression tables we are destroying the nic
-	 * and we don't want the wait progression thread to progress us
-	 * after our structures are destroyed.
-	 */
-	pthread_mutex_lock(&gnix_nic_list_lock);
-
-	dlist_remove(&nic->gnix_nic_list);
-	--gnix_nics_per_ptag[nic->ptag];
-	dlist_remove(&nic->ptag_nic_list);
-
-	pthread_mutex_unlock(&gnix_nic_list_lock);
 	__gnix_nic_tx_freelist_destroy(nic);
 
 	/*
@@ -813,11 +818,6 @@ static void __nic_destruct(void *obj)
 			  "_gnix_mbox_allocator_destroy returned %s\n",
 			  fi_strerror(-ret));
 
-	/*
-	 * see comments in the nic constructor about why
-	 * the following code section is currently stubbed out.
-	 */
-#if 0
 	ret = _gnix_mbox_allocator_destroy(nic->s_rdma_buf_hndl);
 	if (ret != FI_SUCCESS)
 		GNIX_WARN(FI_LOG_EP_CTRL,
@@ -829,24 +829,12 @@ static void __nic_destruct(void *obj)
 		GNIX_WARN(FI_LOG_EP_CTRL,
 			  "_gnix_mbox_allocator_destroy returned %s\n",
 			  fi_strerror(-ret));
-#endif
 
 	if (!nic->gni_cdm_hndl) {
 		GNIX_WARN(FI_LOG_EP_CTRL, "No CDM attached to nic, nic=%p");
 	}
 
 	assert(nic->gni_cdm_hndl != NULL);
-
-	if (nic->rx_cq != NULL && nic->rx_cq != nic->rx_cq_blk) {
-		status = GNI_CqDestroy(nic->rx_cq);
-		if (status != GNI_RC_SUCCESS) {
-			GNIX_WARN(FI_LOG_EP_CTRL,
-				  "GNI_CqDestroy returned %s\n",
-				 gni_err_str[status]);
-			ret = gnixu_to_fi_errno(status);
-			goto err;
-		}
-	}
 
 	if (nic->rx_cq_blk != NULL) {
 		status = GNI_CqDestroy(nic->rx_cq_blk);
@@ -859,8 +847,8 @@ static void __nic_destruct(void *obj)
 		}
 	}
 
-	if (nic->tx_cq != NULL && nic->tx_cq != nic->tx_cq_blk) {
-		status = GNI_CqDestroy(nic->tx_cq);
+	if (nic->rx_cq != NULL) {
+		status = GNI_CqDestroy(nic->rx_cq);
 		if (status != GNI_RC_SUCCESS) {
 			GNIX_WARN(FI_LOG_EP_CTRL,
 				  "GNI_CqDestroy returned %s\n",
@@ -872,6 +860,17 @@ static void __nic_destruct(void *obj)
 
 	if (nic->tx_cq_blk != NULL) {
 		status = GNI_CqDestroy(nic->tx_cq_blk);
+		if (status != GNI_RC_SUCCESS) {
+			GNIX_WARN(FI_LOG_EP_CTRL,
+				  "GNI_CqDestroy returned %s\n",
+				 gni_err_str[status]);
+			ret = gnixu_to_fi_errno(status);
+			goto err;
+		}
+	}
+
+	if (nic->tx_cq != NULL) {
+		status = GNI_CqDestroy(nic->tx_cq);
 		if (status != GNI_RC_SUCCESS) {
 			GNIX_WARN(FI_LOG_EP_CTRL,
 				  "GNI_CqDestroy returned %s\n",
@@ -899,18 +898,20 @@ static void __nic_destruct(void *obj)
 	}
 
 	/*
-	 * destroy VC free list associated with this nic
-	 */
-
-	_gnix_fl_destroy(&nic->vc_freelist);
-
-	/*
 	 * remove the nic from the linked lists
 	 * for the domain and the global nic list
 	 */
 
 err:
 	_gnix_free_bitmap(&nic->vc_id_bitmap);
+
+	pthread_mutex_lock(&gnix_nic_list_lock);
+
+	dlist_remove(&nic->gnix_nic_list);
+	--gnix_nics_per_ptag[nic->ptag];
+	dlist_remove(&nic->dom_nic_list);
+
+	pthread_mutex_unlock(&gnix_nic_list_lock);
 
 	free(nic);
 }
@@ -939,13 +940,11 @@ int gnix_nic_alloc(struct gnix_fid_domain *domain,
 	struct gnix_nic *nic = NULL;
 	uint32_t device_addr;
 	gni_return_t status;
-	uint32_t fake_cdm_id = GNIX_CREATE_CDM_ID;
+	uint32_t fake_cdm_id;
 	gni_smsg_attr_t smsg_mbox_attr;
 	struct gnix_nic_attr *nic_attr = &default_attr;
 	uint32_t num_corespec_cpus = 0;
 	bool must_alloc_nic = false;
-	bool free_list_inited = false;
-	struct gnix_auth_key *auth_key;
 
 	GNIX_TRACE(FI_LOG_EP_CTRL, "\n");
 
@@ -957,10 +956,9 @@ int gnix_nic_alloc(struct gnix_fid_domain *domain,
 		if (ret != FI_SUCCESS)
 			return ret;
 		nic_attr = attr;
-		must_alloc_nic = nic_attr->must_alloc;
+		if (nic_attr->use_cdm_id == true)
+			must_alloc_nic = true;
 	}
-
-	auth_key = nic_attr->auth_key;
 
 	/*
 	 * If we've maxed out the number of nics for this domain/ptag,
@@ -982,18 +980,17 @@ int gnix_nic_alloc(struct gnix_fid_domain *domain,
 
 	/*
 	 * we can reuse previously allocated nics as long as a
-	 * must_alloc is not specified in the nic_attr arg.
+	 * cdm_id is not specified in the nic_attr arg.
 	 */
 
-	if ((must_alloc_nic == false) &&
-	    (gnix_nics_per_ptag[auth_key->ptag] >= gnix_max_nics_per_ptag)) {
-		assert(!dlist_empty(&gnix_nic_list_ptag[auth_key->ptag]));
+	if ((must_alloc_nic == false) && (gnix_nics_per_ptag[domain->ptag] >=
+					 gnix_max_nics_per_ptag)) {
+		assert(!dlist_empty(&domain->nic_list));
 
-		nic = dlist_first_entry(&gnix_nic_list_ptag[auth_key->ptag],
-					struct gnix_nic, ptag_nic_list);
-		dlist_remove(&nic->ptag_nic_list);
-		dlist_insert_tail(&nic->ptag_nic_list,
-				  &gnix_nic_list_ptag[auth_key->ptag]);
+		nic = dlist_first_entry(&domain->nic_list, struct gnix_nic,
+					dom_nic_list);
+		dlist_remove(&nic->dom_nic_list);
+		dlist_insert_tail(&nic->dom_nic_list, &domain->nic_list);
 		_gnix_ref_get(nic);
 
 		GNIX_INFO(FI_LOG_EP_CTRL, "Reusing NIC:%p\n", nic);
@@ -1011,8 +1008,6 @@ int gnix_nic_alloc(struct gnix_fid_domain *domain,
 			goto err;
 		}
 
-		nic->using_vmdh = domain->using_vmdh;
-
 		if (nic_attr->use_cdm_id == false) {
 			ret = _gnix_cm_nic_create_cdm_id(domain, &fake_cdm_id);
 			if (ret != FI_SUCCESS) {
@@ -1026,8 +1021,8 @@ int gnix_nic_alloc(struct gnix_fid_domain *domain,
 
 		if (nic_attr->gni_cdm_hndl == NULL) {
 			status = GNI_CdmCreate(fake_cdm_id,
-						auth_key->ptag,
-						auth_key->cookie,
+						domain->ptag,
+						domain->cookie,
 						gnix_cdm_modes,
 						&nic->gni_cdm_hndl);
 			if (status != GNI_RC_SUCCESS) {
@@ -1053,7 +1048,7 @@ int gnix_nic_alloc(struct gnix_fid_domain *domain,
 			if (status != GNI_RC_SUCCESS) {
 				GNIX_WARN(FI_LOG_EP_CTRL, "GNI_CdmAttach returned %s\n",
 					 gni_err_str[status]);
-				_gnix_dump_gni_res(auth_key->ptag);
+				_gnix_dump_gni_res(domain->ptag);
 				ret = gnixu_to_fi_errno(status);
 				goto err1;
 			}
@@ -1065,55 +1060,66 @@ int gnix_nic_alloc(struct gnix_fid_domain *domain,
 		 */
 
 		status = GNI_CqCreate(nic->gni_nic_hndl,
-					domain->params.tx_cq_size,
+					domain->gni_tx_cq_size,
 					0,                  /* no delay count */
-					GNI_CQ_BLOCKING |
-						domain->gni_cq_modes,
+					GNI_CQ_NOBLOCK |
+					domain->gni_cq_modes,
 					NULL,              /* useless handler */
 					NULL,               /* useless handler
 								context */
+					&nic->tx_cq);
+		if (status != GNI_RC_SUCCESS) {
+			GNIX_WARN(FI_LOG_EP_CTRL,
+				  "GNI_CqCreate returned %s\n",
+				  gni_err_str[status]);
+			_gnix_dump_gni_res(domain->ptag);
+			ret = gnixu_to_fi_errno(status);
+			goto err1;
+		}
+
+		status = GNI_CqCreate(nic->gni_nic_hndl,
+					domain->gni_tx_cq_size,
+					0,
+					GNI_CQ_BLOCKING |
+						domain->gni_cq_modes,
+					NULL,
+					NULL,
 					&nic->tx_cq_blk);
 		if (status != GNI_RC_SUCCESS) {
 			GNIX_WARN(FI_LOG_EP_CTRL,
 				  "GNI_CqCreate returned %s\n",
 				  gni_err_str[status]);
-			_gnix_dump_gni_res(auth_key->ptag);
+			_gnix_dump_gni_res(domain->ptag);
 			ret = gnixu_to_fi_errno(status);
 			goto err1;
 		}
-
-		/* Use blocking CQs for all operations if eager_auto_progress
-		 * is used.  */
-		if (domain->params.eager_auto_progress) {
-			nic->tx_cq = nic->tx_cq_blk;
-		} else {
-			status = GNI_CqCreate(nic->gni_nic_hndl,
-						domain->params.tx_cq_size,
-						0, /* no delay count */
-						domain->gni_cq_modes,
-						NULL, /* useless handler */
-						NULL, /* useless handler ctx */
-						&nic->tx_cq);
-			if (status != GNI_RC_SUCCESS) {
-				GNIX_WARN(FI_LOG_EP_CTRL,
-					  "GNI_CqCreate returned %s\n",
-					  gni_err_str[status]);
-				_gnix_dump_gni_res(auth_key->ptag);
-				ret = gnixu_to_fi_errno(status);
-				goto err1;
-			}
-		}
-
 
 		/*
 		 * create RX CQs - first polling, then blocking
 		 */
 
 		status = GNI_CqCreate(nic->gni_nic_hndl,
-					domain->params.rx_cq_size,
+					domain->gni_rx_cq_size,
+					0,
+					GNI_CQ_NOBLOCK |
+						domain->gni_cq_modes,
+					NULL,
+					NULL,
+					&nic->rx_cq);
+		if (status != GNI_RC_SUCCESS) {
+			GNIX_WARN(FI_LOG_EP_CTRL,
+				  "GNI_CqCreate returned %s\n",
+				  gni_err_str[status]);
+			_gnix_dump_gni_res(domain->ptag);
+			ret = gnixu_to_fi_errno(status);
+			goto err1;
+		}
+
+		status = GNI_CqCreate(nic->gni_nic_hndl,
+					domain->gni_rx_cq_size,
 					0,
 					GNI_CQ_BLOCKING |
-						domain->gni_cq_modes,
+					domain->gni_cq_modes,
 					NULL,
 					NULL,
 					&nic->rx_cq_blk);
@@ -1121,36 +1127,14 @@ int gnix_nic_alloc(struct gnix_fid_domain *domain,
 			GNIX_WARN(FI_LOG_EP_CTRL,
 				  "GNI_CqCreate returned %s\n",
 				  gni_err_str[status]);
-			_gnix_dump_gni_res(auth_key->ptag);
+			_gnix_dump_gni_res(domain->ptag);
 			ret = gnixu_to_fi_errno(status);
 			goto err1;
 		}
 
-		/* Use blocking CQs for all operations if eager_auto_progress
-		 * is used.  */
-		if (domain->params.eager_auto_progress) {
-			nic->rx_cq = nic->rx_cq_blk;
-		} else {
-			status = GNI_CqCreate(nic->gni_nic_hndl,
-						domain->params.rx_cq_size,
-						0,
-						domain->gni_cq_modes,
-						NULL,
-						NULL,
-						&nic->rx_cq);
-			if (status != GNI_RC_SUCCESS) {
-				GNIX_WARN(FI_LOG_EP_CTRL,
-					  "GNI_CqCreate returned %s\n",
-					  gni_err_str[status]);
-				_gnix_dump_gni_res(auth_key->ptag);
-				ret = gnixu_to_fi_errno(status);
-				goto err1;
-			}
-		}
-
 		nic->device_addr = device_addr;
-		nic->ptag = auth_key->ptag;
-		nic->cookie = auth_key->cookie;
+		nic->ptag = domain->ptag;
+		nic->cookie = domain->cookie;
 
 		nic->vc_id_table_capacity = domain->params.vc_id_table_capacity;
 		nic->vc_id_table = malloc(sizeof(void *) *
@@ -1163,7 +1147,7 @@ int gnix_nic_alloc(struct gnix_fid_domain *domain,
 		}
 
 		ret = _gnix_alloc_bitmap(&nic->vc_id_bitmap,
-					 nic->vc_id_table_capacity, NULL);
+					 nic->vc_id_table_capacity);
 		if (ret != FI_SUCCESS) {
 			GNIX_WARN(FI_LOG_EP_CTRL,
 				  "alloc_bitmap returned %d\n", ret);
@@ -1171,47 +1155,18 @@ int gnix_nic_alloc(struct gnix_fid_domain *domain,
 		}
 		fastlock_init(&nic->vc_id_lock);
 
-		/*
-		 * initialize free list for VC's
-		 * In addition to hopefully allowing for a more compact
-		 * allocation of VC structs, the free list is also import
-		 * because there is a window of time when using auto progress
-		 * that a thread may be going through the progress engine
-		 * while one of the application threads is actively tearing
-		 * down an endpoint (and hence its associated VCs) before the
-		 * rem_id for the vc is removed from the vector.
-		 * As a consequence, it is important that
-		 * the memory allocated within the freelist allocator not be
-		 * returned to the system prior to the freelist being destroyed
-		 * as part of the nic destructor procedure.  The freelist is
-		 * destroyed in that procedure after the progress thread
-		 * has been joined.
-		 */
-
-		ret = _gnix_fl_init_ts(sizeof(struct gnix_vc),
-				       offsetof(struct gnix_vc, fr_list),
-				       GNIX_VC_FL_MIN_SIZE,
-				       GNIX_VC_FL_INIT_REFILL_SIZE,
-				       0,
-				       0,
-				       &nic->vc_freelist);
-		if (ret == FI_SUCCESS) {
-			free_list_inited = true;
-		} else {
-			GNIX_DEBUG(FI_LOG_EP_DATA, "_gnix_fl_init returned: %s\n",
-				   fi_strerror(-ret));
-			goto err1;
-		}
-
 		fastlock_init(&nic->lock);
 
-		ret = __gnix_nic_tx_freelist_init(nic,
-						  domain->params.tx_cq_size);
+		ret = __gnix_nic_tx_freelist_init(nic, domain->gni_tx_cq_size);
 		if (ret != FI_SUCCESS)
 			goto err1;
 
-		fastlock_init(&nic->prog_vcs_lock);
-		dlist_init(&nic->prog_vcs);
+		fastlock_init(&nic->rx_vc_lock);
+		dlist_init(&nic->rx_vcs);
+		fastlock_init(&nic->work_vc_lock);
+		dlist_init(&nic->work_vcs);
+		fastlock_init(&nic->tx_vc_lock);
+		dlist_init(&nic->tx_vcs);
 
 		_gnix_ref_init(&nic->ref_cnt, 1, __nic_destruct);
 
@@ -1261,11 +1216,8 @@ int gnix_nic_alloc(struct gnix_fid_domain *domain,
 		 * TODO: hardwired constants, uff
 		 * TODO: better to use a buddy allocator or some other
 		 * allocator
-		 * Disable these for now as we're not using and they
-		 * chew up a lot of IOMMU space per nic.
 		 */
 
-#if 0
 		ret = _gnix_mbox_allocator_create(nic,
 						  NULL,
 						  GNIX_PAGE_2MB,
@@ -1276,7 +1228,6 @@ int gnix_nic_alloc(struct gnix_fid_domain *domain,
 			GNIX_WARN(FI_LOG_EP_CTRL,
 				  "_gnix_mbox_alloc returned %s\n",
 				  fi_strerror(-ret));
-			_gnix_dump_gni_res(domain->ptag);
 			goto err1;
 		}
 
@@ -1290,17 +1241,14 @@ int gnix_nic_alloc(struct gnix_fid_domain *domain,
 			GNIX_WARN(FI_LOG_EP_CTRL,
 				  "_gnix_mbox_alloc returned %s\n",
 				  fi_strerror(-ret));
-			_gnix_dump_gni_res(domain->ptag);
 			goto err1;
 		}
-#endif
 
 		ret =  __nic_setup_irq_cq(nic);
 		if (ret != FI_SUCCESS) {
 			GNIX_WARN(FI_LOG_EP_CTRL,
 				  "__nic_setup_irq_cq returned %s\n",
 				  fi_strerror(-ret));
-			_gnix_dump_gni_res(auth_key->ptag);
 			goto err1;
 		}
 
@@ -1339,30 +1287,26 @@ int gnix_nic_alloc(struct gnix_fid_domain *domain,
 					     (void *)nic);
 			if (ret)
 				GNIX_WARN(FI_LOG_EP_CTRL,
-				"pthread_create call returned %d\n", ret);
+				"pthread_ceate  call returned %d\n", ret);
 		}
 
 		dlist_insert_tail(&nic->gnix_nic_list, &gnix_nic_list);
-		dlist_insert_tail(&nic->ptag_nic_list,
-				  &gnix_nic_list_ptag[auth_key->ptag]);
+		dlist_insert_tail(&nic->dom_nic_list, &domain->nic_list);
 
-		nic->smsg_callbacks = gnix_ep_smsg_callbacks;
-
-		++gnix_nics_per_ptag[auth_key->ptag];
+		++gnix_nics_per_ptag[domain->ptag];
 
 		GNIX_INFO(FI_LOG_EP_CTRL, "Allocated NIC:%p\n", nic);
 	}
 
 	if (nic) {
 		nic->requires_lock = domain->thread_model != FI_THREAD_COMPLETION;
-		nic->using_vmdh = domain->using_vmdh;
 	}
 
 	*nic_ptr = nic;
 	goto out;
 
 err1:
-	ofi_atomic_dec32(&gnix_id_counter);
+	atomic_dec(&gnix_id_counter);
 err:
 	if (nic != NULL) {
 		__nic_teardown_irq_cq(nic);
@@ -1372,19 +1316,17 @@ err:
 			_gnix_mbox_allocator_destroy(nic->s_rdma_buf_hndl);
 		if (nic->mbox_hndl != NULL)
 			_gnix_mbox_allocator_destroy(nic->mbox_hndl);
-		if (nic->rx_cq != NULL && nic->rx_cq != nic->rx_cq_blk)
-			GNI_CqDestroy(nic->rx_cq);
 		if (nic->rx_cq_blk != NULL)
 			GNI_CqDestroy(nic->rx_cq_blk);
-		if (nic->tx_cq != NULL && nic->tx_cq != nic->tx_cq_blk)
-			GNI_CqDestroy(nic->tx_cq);
+		if (nic->rx_cq != NULL)
+			GNI_CqDestroy(nic->rx_cq);
 		if (nic->tx_cq_blk != NULL)
 			GNI_CqDestroy(nic->tx_cq_blk);
+		if (nic->tx_cq != NULL)
+			GNI_CqDestroy(nic->tx_cq);
 		if ((nic->gni_cdm_hndl != NULL) && (nic->allocd_gni_res &
 		    GNIX_NIC_CDM_ALLOCD))
 			GNI_CdmDestroy(nic->gni_cdm_hndl);
-		if (free_list_inited == true)
-			_gnix_fl_destroy(&nic->vc_freelist);
 		free(nic);
 	}
 
@@ -1392,35 +1334,3 @@ out:
 	pthread_mutex_unlock(&gnix_nic_list_lock);
 	return ret;
 }
-
-void _gnix_nic_init(void)
-{
-	int i, rc;
-
-	for (i = 0; i < GNI_PTAG_MAX; i++) {
-		dlist_init(&gnix_nic_list_ptag[i]);
-	}
-
-	rc = _gnix_nics_per_rank(&gnix_max_nics_per_ptag);
-	if (rc == FI_SUCCESS) {
-		GNIX_DEBUG(FI_LOG_FABRIC, "gnix_max_nics_per_ptag: %u\n",
-			   gnix_max_nics_per_ptag);
-	} else {
-		GNIX_WARN(FI_LOG_FABRIC, "_gnix_nics_per_rank failed: %d\n",
-			  rc);
-	}
-
-	if (getenv("GNIX_MAX_NICS") != NULL)
-		gnix_max_nics_per_ptag = atoi(getenv("GNIX_MAX_NICS"));
-
-	/*
-	 * Well if we didn't get 1 nic, that means we must really be doing
-	 * FMA sharing.
-	 */
-
-	if (gnix_max_nics_per_ptag == 0) {
-		gnix_max_nics_per_ptag = 1;
-		GNIX_WARN(FI_LOG_FABRIC, "Using inter-procss FMA sharing\n");
-	}
-}
-

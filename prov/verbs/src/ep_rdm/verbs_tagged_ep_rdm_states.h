@@ -170,17 +170,16 @@ struct fi_ibv_recv_got_pkt_process_data {
 
 // rma service data types
 
-
 struct fi_ibv_rdm_rma_start_data {
 	struct fi_ibv_rdm_ep *ep_rdm;
 	struct fi_ibv_rdm_conn *conn;
 	void *context;
 	uint64_t flags;
 	uint64_t data_len;
-	uintptr_t rbuf;
+	uint64_t rbuf;
 	uintptr_t lbuf;
-	uint64_t mr_rkey;
-	uint64_t mr_lkey;
+	uint32_t rkey;
+	uint32_t lkey;
 	enum ibv_wr_opcode op_code;
 };
 
@@ -190,8 +189,8 @@ struct fi_ibv_rma_post_ready_data {
 
 // Interfaces
 
-ssize_t fi_ibv_rdm_req_hndls_init(void);
-ssize_t fi_ibv_rdm_req_hndls_clean(void);
+ssize_t fi_ibv_rdm_req_hndls_init();
+ssize_t fi_ibv_rdm_req_hndls_clean();
 ssize_t fi_ibv_rdm_req_hndl(struct fi_ibv_rdm_request *request,
 			    enum fi_ibv_rdm_request_event event,
 			    void *data);

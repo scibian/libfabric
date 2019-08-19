@@ -1,15 +1,12 @@
-Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Format: http://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: libfabric
-Source: IntelOPA-IFS release at http://www.intel.com
+Upstream-Contact: Sean Hefty <sean.hefty@intel.com>
+Source: https://github.com/ofiwg/libfabric.git
 
-Files: *
-Copyright: 2015-2018 Intel Corporation
-           2015-2018 Cisco Systems, Inc.
-           and many others
-License: GPL-2 or BSD-2-clause
 
 Files: include/fasthash.h
-Copyright: 2012 Zilong Tan (eric.zltan@gmail.com)
+       src/fasthash.c
+Copyright: Copyright (C) 2012 Zilong Tan (eric.zltan@gmail.com)
 License: Expat
  Permission is hereby granted, free of charge, to any person
  obtaining a copy of this software and associated documentation
@@ -31,31 +28,40 @@ License: Expat
  CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  SOFTWARE.
 
-Files: debian/*
-Copyright: 2017-2019 System Fabric Works, Inc.
-License: GPL-2 or BSD-2-clause
-
-License: GPL-2
- On Debian systems, the full text of the GNU General Public
- License version 2 can be found in the file
- `/usr/share/common-licenses/GPL-2'.
-
-License: BSD-2-Clause
- Copyright (c) 2015-2018 Intel Corporation. All rights reserved.
- Copyright (c) 2015-2017 Cisco Systems, Inc.  All rights reserved.
- Copyright (c) 2017-2019 System Fabric Works, Inc. All rights reserved.
+Files: *
+Copyright:
+ Copyright 2011-2016 Intel Corporation.
+ Copyright 2005-2016 Cisco Systems, Inc.
+ Copyright 2015-2016, Cray Inc.
+ Copyright 2015-2016, Los Alamos National Security, LLC.
+ Copyright 2007, Nuova Systems, Inc.
+ Copyright 2003-2014, Troy D. Hanson http:troydhanson.github.com/uthash/
+ Copyright 2012, Zilong Tan (eric.zltan@gmail.com)
+ Copyright 2003-2006, PathScale, Inc.
+ Copyright 2006-2012. QLogic Corporation.
+ Copyright 2004-2005, Topspin Communications.
+License: BSD-2-clause or GPL-2
+ libfabric is licensed under a choice of one of two licenses.  You may
+ choose to be licensed under the terms of the GNU General Public
+ License (GPL) Version 2, available from the file
+ /usr/share/common-licenses/GPL-2 on your Debian system, or the
+ BSD license below:
+ .
+ ==================================================================
+ .
+ OpenIB.org BSD license
  .
  Redistribution and use in source and binary forms, with or without
  modification, are permitted provided that the following conditions
  are met:
  .
-  * Redistributions of source code must retain the above copyright
-    notice, this list of conditions and the following disclaimer.
+   * Redistributions of source code must retain the above copyright
+     notice, this list of conditions and the following disclaimer.
  .
-  * Redistributions in binary form must reproduce the above
-    copyright notice, this list of conditions and the following
-    disclaimer in the documentation and/or other materials provided
-    with the distribution.
+   * Redistributions in binary form must reproduce the above
+     copyright notice, this list of conditions and the following
+     disclaimer in the documentation and/or other materials provided
+     with the distribution.
  .
  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
@@ -69,3 +75,24 @@ License: BSD-2-Clause
  LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
  ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  POSSIBILITY OF SUCH DAMAGE.
+ .
+ ==================================================================
+
+Files: debian/*
+Copyright: 2016 Q-Leap Networks GmbH <info@q-leap.de>
+License: GPL-2+
+ This package is free software; you can redistribute it and/or modify
+ it under the terms of the GNU General Public License as published by
+ the Free Software Foundation; either version 2 of the License, or
+ (at your option) any later version.
+ .
+ This package is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ GNU General Public License for more details.
+ .
+ You should have received a copy of the GNU General Public License
+ along with this program. If not, see <http://www.gnu.org/licenses/>
+ .
+ On Debian systems, the complete text of the GNU General
+ Public License version 2 can be found in "/usr/share/common-licenses/GPL-2".

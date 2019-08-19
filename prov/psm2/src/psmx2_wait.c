@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2018 Intel Corporation. All rights reserved.
+ * Copyright (c) 2013-2014 Intel Corporation. All rights reserved.
  *
  * This software is waitailable to you under a choice of one of two
  * licenses.  You may choose to be licensed under the terms of the GNU
@@ -47,9 +47,7 @@ static volatile int	psmx2_wait_thread_busy = 0;
 
 static void *psmx2_wait_progress(void *args)
 {
-	struct psmx2_fid_fabric *fabric = args;
-	struct psmx2_fid_domain *domain;
-	struct dlist_entry *item;
+	struct psmx2_fid_domain *domain = args;
 
 	psmx2_wait_thread_ready = 1;
 	pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
@@ -63,21 +61,8 @@ static void *psmx2_wait_progress(void *args)
 		pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
 
 		psmx2_wait_thread_busy = 1;
-		while (psmx2_wait_thread_enabled) {
-			psmx2_lock(&fabric->domain_lock, 1);
-			dlist_foreach(&fabric->domain_list, item) {
-				domain = container_of(item, struct psmx2_fid_domain, entry);
-				if (domain->progress_thread_enabled &&
-				    domain->progress_thread != pthread_self())
-					continue;
-
-				psmx2_progress_all(domain);
-
-				if (!psmx2_wait_thread_enabled)
-					break;
-			}
-			psmx2_unlock(&fabric->domain_lock, 1);
-		}
+		while (psmx2_wait_thread_enabled)
+			psmx2_progress(domain);
 
 		psmx2_wait_thread_busy = 0;
 
@@ -87,27 +72,15 @@ static void *psmx2_wait_progress(void *args)
 	return NULL;
 }
 
-static void psmx2_wait_start_progress(struct psmx2_fid_fabric *fabric)
+static void psmx2_wait_start_progress(struct psmx2_fid_domain *domain)
 {
-	struct dlist_entry *item;
-	struct psmx2_fid_domain *domain;
-	int run_wait_thread = 0;
 	pthread_attr_t attr;
 	int err;
 
-	if (!fabric)
+	if (!domain)
 		return;
 
-	psmx2_lock(&fabric->domain_lock, 1);
-	dlist_foreach(&fabric->domain_list, item) {
-		domain = container_of(item, struct psmx2_fid_domain, entry);
-		if (!domain->progress_thread_enabled ||
-		    domain->progress_thread == pthread_self())
-			run_wait_thread = 1;
-	}
-	psmx2_unlock(&fabric->domain_lock, 1);
-
-	if (!run_wait_thread)
+	if (domain->progress_thread_enabled && domain->progress_thread != pthread_self())
 		return;
 
 	if (!psmx2_wait_thread) {
@@ -116,7 +89,7 @@ static void psmx2_wait_start_progress(struct psmx2_fid_fabric *fabric)
 		pthread_attr_init(&attr);
 		pthread_attr_setdetachstate(&attr,PTHREAD_CREATE_DETACHED);
 		err = pthread_create(&psmx2_wait_thread, &attr,
-				     psmx2_wait_progress, (void *)fabric);
+				     psmx2_wait_progress, (void *)domain);
 		if (err)
 			FI_WARN(&psmx2_prov, FI_LOG_EQ,
 				"cannot create wait progress thread\n");
@@ -149,7 +122,7 @@ static int psmx2_wait_wait(struct fid_wait *wait, int timeout)
 	wait_priv = container_of(wait, struct util_wait, wait_fid);
 	fabric = container_of(wait_priv->fabric, struct psmx2_fid_fabric, util_fabric);
 
-	psmx2_wait_start_progress(fabric);
+	psmx2_wait_start_progress(fabric->active_domain);
 
 	err = psmx2_wait_ops_save->wait(wait, timeout);
 
