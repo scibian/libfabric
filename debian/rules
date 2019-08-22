@@ -11,7 +11,7 @@ ifeq (amd64,$(DEB_HOST_ARCH))
 endif
 
 configure_providers = \
-	--enable-psm=yes \
+	--enable-psm=no \
 	--enable-sockets=yes \
 	--enable-verbs=yes \
 	--enable-usnic=no \
