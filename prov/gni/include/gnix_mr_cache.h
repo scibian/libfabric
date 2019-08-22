@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015-2017 Cray Inc. All rights reserved.
+ * Copyright (c) 2015-2016 Cray Inc. All rights reserved.
  * Copyright (c) 2015 Los Alamos National Security, LLC. All rights reserved.
  *
  * This software is available to you under a choice of one of two
@@ -110,7 +110,6 @@
 
 /* provider includes */
 #include "gnix_util.h"
-#include "gnix_smrn.h"
 
 /* struct declarations */
 struct _gnix_fi_reg_context {
@@ -119,8 +118,6 @@ struct _gnix_fi_reg_context {
 	uint64_t requested_key;
 	uint64_t flags;
 	void *context;
-	struct gnix_auth_key *auth_key;
-	int reserved;
 };
 
 /**
@@ -151,7 +148,7 @@ typedef struct gnix_mr_cache_attr {
 	void *reg_context;
 	void *dereg_context;
 	void *destruct_context;
-	struct gnix_smrn *smrn;
+	struct gnix_mr_notifier *notifier;
 	void *(*reg_callback)(void *handle, void *address, size_t length,
 			struct _gnix_fi_reg_context *fi_reg_context,
 			void *context);
@@ -172,7 +169,7 @@ typedef enum {
  * @brief  gnix memory registration cache entry storage
  */
 struct gnix_mrce_storage {
-	ofi_atomic32_t elements;
+	atomic_t elements;
 	RbtHandle rb_tree;
 };
 
@@ -190,7 +187,6 @@ struct gnix_mrce_storage {
 typedef struct gnix_mr_cache {
 	gnix_mrc_state_e state;
 	gnix_mr_cache_attr_t attr;
-	struct gnix_smrn_rq rq;
 	struct dlist_entry lru_head;
 	struct gnix_mrce_storage inuse;
 	struct gnix_mrce_storage stale;

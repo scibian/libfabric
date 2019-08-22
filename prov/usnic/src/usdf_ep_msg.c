@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014-2018, Cisco Systems, Inc. All rights reserved.
+ * Copyright (c) 2014-2016, Cisco Systems, Inc. All rights reserved.
  *
  * This software is available to you under a choice of one of two
  * licenses.  You may choose to be licensed under the terms of the GNU
@@ -53,9 +53,8 @@
 #include <rdma/fi_endpoint.h>
 #include <rdma/fi_rma.h>
 #include <rdma/fi_errno.h>
-#include "ofi.h"
-#include "ofi_enosys.h"
-#include "ofi_util.h"
+#include "fi.h"
+#include "fi_enosys.h"
 
 #include "usnic_direct.h"
 #include "usd.h"
@@ -112,38 +111,17 @@ static const struct fi_ep_attr msg_dflt_ep_attr = {
 };
 
 static const struct fi_domain_attr msg_dflt_domain_attr = {
-	.caps = USDF_DOM_CAPS,
 	.threading = FI_THREAD_UNSPEC,
 	.control_progress = FI_PROGRESS_AUTO,
 	.data_progress = FI_PROGRESS_MANUAL,
 	.resource_mgmt = FI_RM_DISABLED,
-	.mr_mode = FI_MR_ALLOCATED | FI_MR_LOCAL | FI_MR_BASIC,
-	.cntr_cnt = USDF_MSG_CNTR_CNT,
-	.mr_iov_limit = USDF_MSG_MR_IOV_LIMIT,
-	.mr_cnt = USDF_MSG_MR_CNT,
-};
-
-static struct fi_ops_atomic usdf_msg_atomic_ops = {
-	.size = sizeof(struct fi_ops_atomic),
-	.write = fi_no_atomic_write,
-	.writev = fi_no_atomic_writev,
-	.writemsg = fi_no_atomic_writemsg,
-	.inject = fi_no_atomic_inject,
-	.readwrite = fi_no_atomic_readwrite,
-	.readwritev = fi_no_atomic_readwritev,
-	.readwritemsg = fi_no_atomic_readwritemsg,
-	.compwrite = fi_no_atomic_compwrite,
-	.compwritev = fi_no_atomic_compwritev,
-	.compwritemsg = fi_no_atomic_compwritemsg,
-	.writevalid = fi_no_atomic_writevalid,
-	.readwritevalid = fi_no_atomic_readwritevalid,
-	.compwritevalid = fi_no_atomic_compwritevalid,
+	.mr_mode = FI_MR_BASIC
 };
 
 /*******************************************************************************
  * Fill functions for attributes
  ******************************************************************************/
-int usdf_msg_fill_ep_attr(const struct fi_info *hints, struct fi_info *fi,
+int usdf_msg_fill_ep_attr(struct fi_info *hints, struct fi_info *fi,
 		struct usd_device_attrs *dap)
 {
 	struct fi_ep_attr defaults;
@@ -185,7 +163,7 @@ out:
 	return FI_SUCCESS;
 }
 
-int usdf_msg_fill_dom_attr(uint32_t version, const struct fi_info *hints,
+int usdf_msg_fill_dom_attr(uint32_t version, struct fi_info *hints,
 			   struct fi_info *fi, struct usd_device_attrs *dap)
 {
 	int ret;
@@ -197,7 +175,7 @@ int usdf_msg_fill_dom_attr(uint32_t version, const struct fi_info *hints,
 		return -FI_ENODATA;
 
 	if (!hints || !hints->domain_attr)
-		goto catch;
+		goto out;
 
 	/* how to handle fi_thread_fid, fi_thread_completion, etc?
 	 */
@@ -235,55 +213,39 @@ int usdf_msg_fill_dom_attr(uint32_t version, const struct fi_info *hints,
 		return -FI_ENODATA;
 	}
 
-	switch (hints->domain_attr->caps) {
-	case 0:
-	case FI_REMOTE_COMM:
+	switch (hints->domain_attr->mr_mode) {
+	case FI_MR_UNSPEC:
+	case FI_MR_BASIC:
 		break;
 	default:
-		USDF_WARN_SYS(DOMAIN,
-			"invalid domain capabilities\n");
 		return -FI_ENODATA;
 	}
 
-	if (ofi_check_mr_mode(&usdf_ops, version, defaults.mr_mode, hints))
-		return -FI_ENODATA;
-
-	if (hints->domain_attr->mr_cnt <= USDF_MSG_MR_CNT) {
-		defaults.mr_cnt = hints->domain_attr->mr_cnt;
-	} else {
-		USDF_DBG_SYS(DOMAIN, "mr_count exceeded provider limit\n");
-		return -FI_ENODATA;
-	}
-
-catch:
-	/* catch the version changes here. */
-	ret = usdf_catch_dom_attr(version, hints, &defaults);
-	if (ret)
-		return ret;
-
+out:
 	*fi->domain_attr = defaults;
 
 	return FI_SUCCESS;
 }
 
-int usdf_msg_fill_tx_attr(uint32_t version, const struct fi_info *hints,
-			  struct fi_info *fi)
+int usdf_msg_fill_tx_attr(struct fi_info *hints, struct fi_info *fi)
 {
-	int ret;
 	struct fi_tx_attr defaults;
 
 	defaults = msg_dflt_tx_attr;
 
 	if (!hints || !hints->tx_attr)
-		goto catch;
+		goto out;
 
 	/* make sure we can support the caps that are requested*/
 	if (hints->tx_attr->caps & ~USDF_MSG_CAPS)
 		return -FI_ENODATA;
 
 	/* clear the mode bits the app doesn't support */
-	if (hints->mode || hints->tx_attr->mode)
-		defaults.mode &= (hints->mode | hints->tx_attr->mode);
+	defaults.mode &= (hints->mode | hints->tx_attr->mode);
+
+	/* make sure the app supports our required mode bits */
+	if ((defaults.mode & USDF_MSG_REQ_MODE) != USDF_MSG_REQ_MODE)
+		return -FI_ENODATA;
 
 	defaults.op_flags |= hints->tx_attr->op_flags;
 
@@ -307,34 +269,31 @@ int usdf_msg_fill_tx_attr(uint32_t version, const struct fi_info *hints,
 	if (hints->tx_attr->size > defaults.size)
 		return -FI_ENODATA;
 
-catch:
-	/* catch version changes here. */
-	ret = usdf_catch_tx_attr(version, &defaults);
-	if (ret)
-		return ret;
-
+out:
 	*fi->tx_attr = defaults;
 
 	return FI_SUCCESS;
 }
 
-int usdf_msg_fill_rx_attr(uint32_t version, const struct fi_info *hints, struct fi_info *fi)
+int usdf_msg_fill_rx_attr(struct fi_info *hints, struct fi_info *fi)
 {
-	int ret;
 	struct fi_rx_attr defaults;
 
 	defaults = msg_dflt_rx_attr;
 
 	if (!hints || !hints->rx_attr)
-		goto catch;
+		goto out;
 
 	/* make sure we can support the capabilities that are requested */
 	if (hints->rx_attr->caps & ~USDF_MSG_CAPS)
 		return -FI_ENODATA;
 
 	/* clear the mode bits the app doesn't support */
-	if (hints->mode || hints->rx_attr->mode)
-		defaults.mode &= (hints->mode | hints->rx_attr->mode);
+	defaults.mode &= (hints->mode | hints->rx_attr->mode);
+
+	/* make sure the app supports our required mode bits */
+	if ((defaults.mode & USDF_MSG_REQ_MODE) != USDF_MSG_REQ_MODE)
+		return -FI_ENODATA;
 
 	defaults.op_flags |= hints->rx_attr->op_flags;
 
@@ -355,12 +314,7 @@ int usdf_msg_fill_rx_attr(uint32_t version, const struct fi_info *hints, struct 
 	if (hints->rx_attr->size > defaults.size)
 		return -FI_ENODATA;
 
-catch:
-	/* catch version changes here. */
-	ret = usdf_catch_rx_attr(version, &defaults);
-	if (ret)
-		return ret;
-
+out:
 	*fi->rx_attr = defaults;
 
 	return FI_SUCCESS;
@@ -693,7 +647,7 @@ usdf_ep_msg_bind_cq(struct usdf_ep *ep, struct usdf_cq *cq, uint64_t flags)
 			goto fail;
 
 		hcq->cqh_cq = cq;
-		ofi_atomic_initialize32(&hcq->cqh_refcnt, 0);
+		atomic_initialize(&hcq->cqh_refcnt, 0);
 		hcq->cqh_progress = usdf_msg_hcq_progress;
 		hcq->cqh_post = usdf_cq_post_soft;
 		TAILQ_INSERT_TAIL(&cq->c.soft.cq_list, hcq, cqh_link);
@@ -702,8 +656,8 @@ usdf_ep_msg_bind_cq(struct usdf_ep *ep, struct usdf_cq *cq, uint64_t flags)
 		TAILQ_INSERT_TAIL(&ep->ep_domain->dom_hcq_list,
 				hcq, cqh_dom_link);
 	}
-	ofi_atomic_inc32(&hcq->cqh_refcnt);
-	ofi_atomic_inc32(&cq->cq_refcnt);
+	atomic_inc(&hcq->cqh_refcnt);
+	atomic_inc(&cq->cq_refcnt);
 	*hcqp = hcq;
 	return 0;
 
@@ -715,16 +669,10 @@ fail:
 static int
 usdf_ep_msg_bind(struct fid *fid, struct fid *bfid, uint64_t flags)
 {
-	int ret;
 	struct usdf_ep *ep;
 	struct usdf_cq *cq;
 
 	USDF_TRACE_SYS(EP_CTRL, "\n");
-
-	/* Validate the flags. */
-	ret = ofi_ep_bind_valid(&usdf_ops, bfid, flags);
-	if (ret)
-		return ret;
 
 	ep = ep_fidtou(fid);
 
@@ -755,7 +703,7 @@ usdf_ep_msg_bind(struct fid *fid, struct fid *bfid, uint64_t flags)
 			return -FI_EINVAL;
 		}
 		ep->ep_eq = eq_fidtou(bfid);
-		ofi_atomic_inc32(&ep->ep_eq->eq_refcnt);
+		atomic_inc(&ep->ep_eq->eq_refcnt);
 		break;
 	default:
 		return -FI_EINVAL;
@@ -772,14 +720,14 @@ usdf_msg_rx_ctx_close(fid_t fid)
 
 	rx = rx_fidtou(fid);
 
-	if (ofi_atomic_get32(&rx->rx_refcnt) > 0) {
+	if (atomic_get(&rx->rx_refcnt) > 0) {
 		return -FI_EBUSY;
 	}
 
 	hcq = rx->r.msg.rx_hcq;
 	if (hcq != NULL) {
-		ofi_atomic_dec32(&hcq->cqh_refcnt);
-		ofi_atomic_dec32(&hcq->cqh_cq->cq_refcnt);
+		atomic_dec(&hcq->cqh_refcnt);
+		atomic_dec(&hcq->cqh_cq->cq_refcnt);
 	}
 
 	if (rx->rx_qp != NULL) {
@@ -787,7 +735,7 @@ usdf_msg_rx_ctx_close(fid_t fid)
 		free(rx->r.msg.rx_rqe_buf);
 		usd_destroy_qp(rx->rx_qp);
 	}
-	ofi_atomic_dec32(&rx->rx_domain->dom_refcnt);
+	atomic_dec(&rx->rx_domain->dom_refcnt);
 
 	free(rx);
 
@@ -802,14 +750,14 @@ usdf_msg_tx_ctx_close(fid_t fid)
 
 	tx = tx_fidtou(fid);
 
-	if (ofi_atomic_get32(&tx->tx_refcnt) > 0) {
+	if (atomic_get(&tx->tx_refcnt) > 0) {
 		return -FI_EBUSY;
 	}
 
 	hcq = tx->t.msg.tx_hcq;
 	if (hcq != NULL) {
-		ofi_atomic_dec32(&hcq->cqh_refcnt);
-		ofi_atomic_dec32(&hcq->cqh_cq->cq_refcnt);
+		atomic_dec(&hcq->cqh_refcnt);
+		atomic_dec(&hcq->cqh_cq->cq_refcnt);
 	}
 
 	if (tx->tx_qp != NULL) {
@@ -817,7 +765,7 @@ usdf_msg_tx_ctx_close(fid_t fid)
 		free(tx->t.msg.tx_wqe_buf);
 		usd_destroy_qp(tx->tx_qp);
 	}
-	ofi_atomic_dec32(&tx->tx_domain->dom_refcnt);
+	atomic_dec(&tx->tx_domain->dom_refcnt);
 
 	free(tx);
 
@@ -833,27 +781,27 @@ usdf_ep_msg_close(fid_t fid)
 
 	ep = ep_fidtou(fid);
 
-	if (ofi_atomic_get32(&ep->ep_refcnt) > 0) {
+	if (atomic_get(&ep->ep_refcnt) > 0) {
 		return -FI_EBUSY;
 	}
 
 	if (ep->ep_rx != NULL) {
-		ofi_atomic_dec32(&ep->ep_rx->rx_refcnt);
+		atomic_dec(&ep->ep_rx->rx_refcnt);
 		if (rx_utofid(ep->ep_rx)->fclass  == FI_CLASS_RX_CTX) {
 			(void) usdf_msg_rx_ctx_close(rx_utofid(ep->ep_rx));
 		}
 	}
 
 	if (ep->ep_tx != NULL) {
-		ofi_atomic_dec32(&ep->ep_tx->tx_refcnt);
+		atomic_dec(&ep->ep_tx->tx_refcnt);
 		if (tx_utofid(ep->ep_tx)->fclass  == FI_CLASS_TX_CTX) {
 			(void) usdf_msg_tx_ctx_close(tx_utofid(ep->ep_tx));
 		}
 	}
 
-	ofi_atomic_dec32(&ep->ep_domain->dom_refcnt);
+	atomic_dec(&ep->ep_domain->dom_refcnt);
 	if (ep->ep_eq != NULL) {
-		ofi_atomic_dec32(&ep->ep_eq->eq_refcnt);
+		atomic_dec(&ep->ep_eq->eq_refcnt);
 	}
 	usdf_timer_free(ep->ep_domain->dom_fabric, ep->e.msg.ep_ack_timer);
 
@@ -882,7 +830,6 @@ static struct fi_ops_cm usdf_cm_msg_ops = {
 	.accept = usdf_cm_msg_accept,
 	.reject = fi_no_reject,
 	.shutdown = fi_no_shutdown,
-	.join = fi_no_join,
 };
 
 static struct fi_ops_msg usdf_msg_ops = {
@@ -901,7 +848,6 @@ static struct fi_ops_msg usdf_msg_ops = {
 static int usdf_ep_msg_control(struct fid *fid, int command, void *arg)
 {
 	struct fid_ep *ep;
-	int ret;
 
 	USDF_TRACE_SYS(EP_CTRL, "\n");
 
@@ -910,17 +856,15 @@ static int usdf_ep_msg_control(struct fid *fid, int command, void *arg)
 		ep = container_of(fid, struct fid_ep, fid);
 		switch (command) {
 		case FI_ENABLE:
-			ret = usdf_ep_msg_enable(ep);
+			return usdf_ep_msg_enable(ep);
 			break;
 		default:
-			ret = -FI_ENOSYS;
+			return -FI_ENOSYS;
 		}
 		break;
 	default:
-		ret = -FI_ENOSYS;
+		return -FI_ENOSYS;
 	}
-
-	return ret;
 }
 
 static struct fi_ops usdf_ep_msg_ops = {
@@ -977,7 +921,6 @@ usdf_ep_msg_open(struct fid_domain *domain, struct fi_info *info,
 	struct usdf_connreq *connreq;
 	struct usdf_pep *parent_pep;
 	int is_bound;
-	uint32_t api_version;
 
 	USDF_TRACE_SYS(EP_CTRL, "\n");
 
@@ -1008,7 +951,6 @@ usdf_ep_msg_open(struct fid_domain *domain, struct fi_info *info,
 
 	udp = dom_ftou(domain);
 	fp = udp->dom_fabric;
-	api_version = fp->fab_attr.fabric->api_version;
 
 	/* allocate peer table if not done */
 	if (udp->dom_peer_tab == NULL) {
@@ -1031,7 +973,6 @@ usdf_ep_msg_open(struct fid_domain *domain, struct fi_info *info,
 	ep->ep_fid.ops = &usdf_base_msg_ops;
 	ep->ep_fid.cm = &usdf_cm_msg_ops;
 	ep->ep_fid.msg = &usdf_msg_ops;
-	ep->ep_fid.atomic = &usdf_msg_atomic_ops;
 	ep->ep_domain = udp;
 	ep->ep_caps = info->caps;
 	ep->ep_mode = info->mode;
@@ -1077,13 +1018,13 @@ usdf_ep_msg_open(struct fid_domain *domain, struct fi_info *info,
 			goto fail;
 		}
 		tx->tx_fid.fid.fclass = FI_CLASS_TX_CTX;
-		ofi_atomic_initialize32(&tx->tx_refcnt, 0);
+		atomic_initialize(&tx->tx_refcnt, 0);
 		tx->tx_domain = udp;
 		tx->tx_progress = usdf_msg_tx_progress;
-		ofi_atomic_inc32(&udp->dom_refcnt);
+		atomic_inc(&udp->dom_refcnt);
 
 		/* use info as the hints structure, and the output structure */
-		ret = usdf_msg_fill_tx_attr(api_version, info, info);
+		ret = usdf_msg_fill_tx_attr(info, info);
 		if (ret != 0)
 			goto fail;
 		tx->tx_attr = *info->tx_attr;
@@ -1093,7 +1034,7 @@ usdf_ep_msg_open(struct fid_domain *domain, struct fi_info *info,
 		TAILQ_INIT(&tx->t.msg.tx_ep_have_acks);
 
 		ep->ep_tx = tx;
-		ofi_atomic_inc32(&tx->tx_refcnt);
+		atomic_inc(&tx->tx_refcnt);
 	}
 	TAILQ_INIT(&ep->e.msg.ep_posted_wqe);
 
@@ -1106,12 +1047,12 @@ usdf_ep_msg_open(struct fid_domain *domain, struct fi_info *info,
 			goto fail;
 		}
 		rx->rx_fid.fid.fclass = FI_CLASS_RX_CTX;
-		ofi_atomic_initialize32(&rx->rx_refcnt, 0);
+		atomic_initialize(&rx->rx_refcnt, 0);
 		rx->rx_domain = udp;
-		ofi_atomic_inc32(&udp->dom_refcnt);
+		atomic_inc(&udp->dom_refcnt);
 
 		/* info serves as both the hints and the output */
-		ret = usdf_msg_fill_rx_attr(api_version, info, info);
+		ret = usdf_msg_fill_rx_attr(info, info);
 		if (ret != 0)
 			goto fail;
 		rx->rx_attr = *info->rx_attr;
@@ -1120,22 +1061,22 @@ usdf_ep_msg_open(struct fid_domain *domain, struct fi_info *info,
 		TAILQ_INIT(&rx->r.msg.rx_posted_rqe);
 
 		ep->ep_rx = rx;
-		ofi_atomic_inc32(&rx->rx_refcnt);
+		atomic_inc(&rx->rx_refcnt);
 	}
 
-	ofi_atomic_initialize32(&ep->ep_refcnt, 0);
-	ofi_atomic_inc32(&udp->dom_refcnt);
+	atomic_initialize(&ep->ep_refcnt, 0);
+	atomic_inc(&udp->dom_refcnt);
 
 	*ep_o = ep_utof(ep);
 	return 0;
 fail:
 	if (rx != NULL) {
 		free(rx);
-		ofi_atomic_dec32(&udp->dom_refcnt);
+		atomic_dec(&udp->dom_refcnt);
 	}
 	if (tx != NULL) {
 		free(tx);
-		ofi_atomic_dec32(&udp->dom_refcnt);
+		atomic_dec(&udp->dom_refcnt);
 	}
 	if (ep != NULL) {
 		if (ep->e.msg.ep_ack_timer != NULL) {

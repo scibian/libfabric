@@ -54,7 +54,6 @@ enum fi_log_subsys {
 	FI_LOG_CQ,
 	FI_LOG_EQ,
 	FI_LOG_MR,
-	FI_LOG_CNTR,
 	FI_LOG_SUBSYS_MAX
 };
 
@@ -70,7 +69,7 @@ int fi_log_enabled(const struct fi_provider *prov, enum fi_log_level level,
 		   enum fi_log_subsys subsys);
 void fi_log(const struct fi_provider *prov, enum fi_log_level level,
 	    enum fi_log_subsys subsys, const char *func, int line,
-	    const char *fmt, ...) __attribute__ ((__format__ (__printf__, 6, 7)));
+	    const char *fmt, ...);
 
 #define FI_LOG(prov, level, subsystem, ...)				\
 	do {								\

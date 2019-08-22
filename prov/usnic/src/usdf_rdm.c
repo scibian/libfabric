@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014-2017, Cisco Systems, Inc. All rights reserved.
+ * Copyright (c) 2014-2016, Cisco Systems, Inc. All rights reserved.
  *
  * This software is available to you under a choice of one of two
  * licenses.  You may choose to be licensed under the terms of the GNU
@@ -53,7 +53,7 @@
 #include <rdma/fi_endpoint.h>
 #include <rdma/fi_rma.h>
 #include <rdma/fi_errno.h>
-#include "ofi.h"
+#include "fi.h"
 
 #include "usd.h"
 #include "usd_post.h"
@@ -128,25 +128,22 @@ usdf_rdm_rdc_ready(struct usdf_rdm_connection *rdc, struct usdf_tx *tx)
 }
 
 static inline uint16_t
-usdf_rdm_rdc_hash_helper(uint32_t ipaddr, uint16_t port)
+usdf_rdm_rdc_hash_helper(uint16_t *ipaddr, uint16_t port)
 {
 	uint16_t hash_index;
 
-	uint16_t lower = (ipaddr & 0xFFFF);
-	uint16_t upper = (ipaddr >> 16);
-
-	hash_index = lower;
-	hash_index ^= upper;
+	hash_index = ipaddr[0];
+	hash_index ^= ipaddr[1];
 	hash_index ^= port;
 
 	return hash_index & USDF_RDM_HASH_MASK;
 }
 
-
 static inline uint16_t
 usdf_rdm_rdc_hash_hdr(struct usd_udp_hdr *hdr)
 {
-	return usdf_rdm_rdc_hash_helper(hdr->uh_ip.saddr, hdr->uh_udp.source);
+	return usdf_rdm_rdc_hash_helper((uint16_t *)&hdr->uh_ip.saddr,
+			hdr->uh_udp.source);
 }
 
 static inline int
@@ -157,18 +154,18 @@ usdf_rdm_rdc_hdr_match(struct usdf_rdm_connection *rdc, struct usd_udp_hdr *hdr)
 }
 
 static inline int
-usdf_rdm_rdc_addr_match(struct usdf_rdm_connection *rdc, uint32_t ipaddr,
+usdf_rdm_rdc_addr_match(struct usdf_rdm_connection *rdc, uint16_t *ipaddr,
 		 uint16_t port)
 {
-	return ipaddr == rdc->dc_hdr.uh_ip.daddr &&
-	       port == rdc->dc_hdr.uh_udp.dest;
+	return *(uint32_t *)ipaddr == rdc->dc_hdr.uh_ip.daddr &&
+	    port == rdc->dc_hdr.uh_udp.dest;
 }
 
 /*
  * Find a matching RDM connection on this domain
  */
 static inline struct usdf_rdm_connection *
-usdf_rdm_rdc_addr_lookup(struct usdf_domain *udp, uint32_t ipaddr,
+usdf_rdm_rdc_addr_lookup(struct usdf_domain *udp, uint16_t *ipaddr,
 		uint16_t port)
 {
 	uint16_t hash_index;
@@ -219,7 +216,8 @@ usdf_rdm_rdc_insert(struct usdf_domain *udp, struct usdf_rdm_connection *rdc)
 {
 	uint16_t hash_index;
 
-	hash_index = usdf_rdm_rdc_hash_helper(rdc->dc_hdr.uh_ip.daddr,
+	hash_index = usdf_rdm_rdc_hash_helper(
+		(uint16_t *)&rdc->dc_hdr.uh_ip.daddr,
 		rdc->dc_hdr.uh_udp.dest);
 	USDF_DBG_SYS(EP_DATA, "insert rdc %p at %u\n", rdc, hash_index);
 
@@ -233,7 +231,8 @@ usdf_rdm_rdc_remove(struct usdf_domain *udp, struct usdf_rdm_connection *rdc)
 	uint16_t hash_index;
 	struct usdf_rdm_connection *prev;
 
-	hash_index = usdf_rdm_rdc_hash_helper(rdc->dc_hdr.uh_ip.daddr,
+	hash_index = usdf_rdm_rdc_hash_helper(
+		(uint16_t *)&rdc->dc_hdr.uh_ip.daddr,
 		rdc->dc_hdr.uh_udp.dest);
 	USDF_DBG_SYS(EP_DATA, "remove rdc %p from %u\n", rdc, hash_index);
 
@@ -261,7 +260,7 @@ usdf_rdc_alloc(struct usdf_domain *udp)
 	} else {
 		rdc = SLIST_FIRST(&udp->dom_rdc_free);
 		SLIST_REMOVE_HEAD(&udp->dom_rdc_free, dc_addr_link);
-		ofi_atomic_dec32(&udp->dom_rdc_free_cnt);
+		atomic_dec(&udp->dom_rdc_free_cnt);
 	}
 	return rdc;
 }
@@ -293,7 +292,7 @@ usdf_rdm_rdc_tx_get(struct usdf_dest *dest, struct usdf_ep *ep)
 
 	udp = tx->tx_domain;
 	rdc = usdf_rdm_rdc_addr_lookup(udp,
-		dest->ds_dest.ds_dest.ds_udp.u_hdr.uh_ip.daddr,
+		(uint16_t *)&dest->ds_dest.ds_dest.ds_udp.u_hdr.uh_ip.daddr,
 		dest->ds_dest.ds_dest.ds_udp.u_hdr.uh_udp.dest);
 
 	if (rdc == NULL) {
@@ -596,7 +595,7 @@ usdf_rdm_send(struct fid_ep *fep, const void *buf, size_t len, void *desc,
 
 	wqe->rd_context = context;
 
-	msg_id = ofi_atomic_inc32(&tx->t.rdm.tx_next_msg_id);
+	msg_id = atomic_inc(&tx->t.rdm.tx_next_msg_id);
 	wqe->rd_msg_id_be = htonl(msg_id);
 
 	wqe->rd_iov[0].iov_base = (void *)buf;
@@ -709,7 +708,7 @@ static inline ssize_t _usdf_rdm_send_vector(struct fid_ep *fep,
 		wqe->rd_last_iov = count - 1;
 	}
 
-	msg_id = ofi_atomic_inc32(&tx->t.rdm.tx_next_msg_id);
+	msg_id = atomic_inc(&tx->t.rdm.tx_next_msg_id);
 
 	wqe->rd_msg_id_be = htonl(msg_id);
 	wqe->rd_context = context;
@@ -787,7 +786,7 @@ usdf_rdm_inject(struct fid_ep *fep, const void *buf, size_t len,
 
 	wqe = usdf_rdm_get_tx_wqe(tx);
 	wqe->rd_context = NULL;
-	msg_id = ofi_atomic_inc32(&tx->t.rdm.tx_next_msg_id);
+	msg_id = atomic_inc(&tx->t.rdm.tx_next_msg_id);
 	wqe->rd_msg_id_be = htonl(msg_id);
 
 	memcpy(wqe->rd_inject_buf, buf, len);
@@ -1437,7 +1436,7 @@ usdf_rdm_rdc_timeout(void *vrdc)
 		usdf_rdm_rdc_remove(udp, rdc);
 
 		SLIST_INSERT_HEAD(&udp->dom_rdc_free, rdc, dc_addr_link);
-		ofi_atomic_inc32(&udp->dom_rdc_free_cnt);
+		atomic_inc(&udp->dom_rdc_free_cnt);
 
 	} else {
 		usdf_timer_set(udp->dom_fabric, rdc->dc_timer,

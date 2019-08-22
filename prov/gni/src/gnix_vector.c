@@ -107,7 +107,7 @@ static inline int __gnix_vec_resize(gnix_vector_t *vec, uint32_t new_size)
 
 static inline int __gnix_vec_create(gnix_vector_t *vec, gnix_vec_attr_t *attr)
 {
-	if (OFI_UNLIKELY(vec->state == GNIX_VEC_STATE_READY)) {
+	if (unlikely(vec->state == GNIX_VEC_STATE_READY)) {
 		GNIX_DEBUG(FI_LOG_EP_DATA, "The vector (%p) is already ready.\n",
 			   vec);
 		return -FI_EINVAL;
@@ -115,7 +115,7 @@ static inline int __gnix_vec_create(gnix_vector_t *vec, gnix_vec_attr_t *attr)
 
 	vec->vector = calloc(attr->vec_initial_size, sizeof(gnix_vec_entry_t));
 
-	if (OFI_UNLIKELY(!vec->vector)) {
+	if (unlikely(!vec->vector)) {
 		GNIX_WARN(FI_LOG_EP_CTRL, "Insufficient memory in "
 			  "_gnix_vec_init.\n");
 		return -FI_ENOMEM;
@@ -130,7 +130,7 @@ static inline int __gnix_vec_create(gnix_vector_t *vec, gnix_vec_attr_t *attr)
 
 static inline int __gnix_vec_close(gnix_vector_t *vec)
 {
-	if (OFI_UNLIKELY(vec->state == GNIX_VEC_STATE_DEAD)) {
+	if (unlikely(vec->state == GNIX_VEC_STATE_DEAD)) {
 		GNIX_DEBUG(FI_LOG_EP_DATA, "The vector (%p) is already dead.\n",
 			   vec);
 		return -FI_EINVAL;
@@ -150,13 +150,13 @@ static inline int __gnix_vec_insert_at(gnix_vector_t *vec,
 {
 	GNIX_TRACE(FI_LOG_EP_CTRL, "\n");
 
-	if (OFI_UNLIKELY(index >= vec->attr.vec_maximum_size)) {
+	if (unlikely(index >= vec->attr.vec_maximum_size)) {
 		GNIX_WARN(FI_LOG_EP_CTRL, "Invalid parameter to "
 			  "__gnix_vec_insert_at\n");
 		return -FI_EINVAL;
 	}
 
-	if (OFI_UNLIKELY(vec->state == GNIX_VEC_STATE_DEAD)) {
+	if (unlikely(vec->state == GNIX_VEC_STATE_DEAD)) {
 		GNIX_FATAL(FI_LOG_EP_CTRL, "gnix_vector_t is in state "
 			   "GNIX_VEC_STATE_DEAD in __gnix_vec_insert_at.\n");
 	}
@@ -165,7 +165,7 @@ static inline int __gnix_vec_insert_at(gnix_vector_t *vec,
 		uint32_t new_size = __gnix_vec_get_new_size(vec, index);
 		int ret = __gnix_vec_resize(vec, new_size);
 
-		if (OFI_UNLIKELY(ret))
+		if (unlikely(ret))
 			return ret;
 	}
 
@@ -182,7 +182,7 @@ static inline int __gnix_vec_insert_at(gnix_vector_t *vec,
 static inline int __gnix_vec_remove_at(gnix_vector_t *vec,
 				       gnix_vec_index_t index)
 {
-	if (OFI_UNLIKELY(vec->state == GNIX_VEC_STATE_DEAD)) {
+	if (unlikely(vec->state == GNIX_VEC_STATE_DEAD)) {
 		GNIX_FATAL(FI_LOG_EP_CTRL, "gnix_vector_t is in state "
 			   "GNIX_VEC_STATE_DEAD in __gnix_vec_remove_at.\n");
 	} else if (index >= vec->attr.cur_size) {
@@ -204,7 +204,7 @@ static inline int __gnix_vec_remove_at(gnix_vector_t *vec,
 static inline int __gnix_vec_at(gnix_vector_t *vec, void **element,
 				gnix_vec_index_t index)
 {
-	if (OFI_UNLIKELY(vec->state == GNIX_VEC_STATE_DEAD)) {
+	if (unlikely(vec->state == GNIX_VEC_STATE_DEAD)) {
 		GNIX_FATAL(FI_LOG_EP_CTRL, "gnix_vector_t is in state "
 			   "GNIX_VEC_STATE_DEAD in __gnix_vec_at.\n");
 	} else if (index >= vec->attr.cur_size) {
@@ -212,7 +212,7 @@ static inline int __gnix_vec_at(gnix_vector_t *vec, void **element,
 			  "__gnix_vec_at\n", index);
 		return -FI_EINVAL;
 	} else {
-		if (OFI_LIKELY((uint64_t) vec->vector[index])) {
+		if (likely((uint64_t) vec->vector[index])) {
 			*element = vec->vector[index];
 		} else {
 			GNIX_DEBUG(FI_LOG_EP_CTRL, "There is no element at index "
@@ -469,7 +469,7 @@ int _gnix_vec_init(struct gnix_vector *vec, gnix_vec_attr_t *attr)
 {
 	GNIX_TRACE(FI_LOG_EP_CTRL, "\n");
 
-	if (OFI_UNLIKELY(!vec || !attr ||
+	if (unlikely(!vec || !attr ||
 		     attr->vec_initial_size > attr->vec_maximum_size)) {
 		GNIX_WARN(FI_LOG_EP_CTRL, "Invalid parameter to _gnix_vec_init."
 			  "\n");
@@ -495,7 +495,7 @@ int _gnix_vec_close(gnix_vector_t *vec)
 {
 	GNIX_TRACE(FI_LOG_EP_CTRL, "\n");
 
-	if (OFI_UNLIKELY(!vec)) {
+	if (unlikely(!vec)) {
 		GNIX_WARN(FI_LOG_EP_CTRL, "Invalid parameter to _gnix_vec_close."
 			  "\n");
 		return -FI_EINVAL;

@@ -53,7 +53,7 @@ int _gnix_trigger_queue_req(struct gnix_fab_req *req)
 	threshold = &trigger_context->trigger.threshold;
 	cntr = container_of(threshold->cntr, struct gnix_fid_cntr, cntr_fid);
 
-	if (ofi_atomic_get32(&cntr->cnt) >= threshold->threshold) {
+	if (atomic_get(&cntr->cnt) >= threshold->threshold) {
 		GNIX_INFO(FI_LOG_EP_DATA,
 			  "Trigger condition met: %p\n",
 			  req);
@@ -100,11 +100,11 @@ void _gnix_trigger_check_cntr(struct gnix_fid_cntr *cntr)
 	struct gnix_fab_req *req, *req2;
 	size_t count;
 
-	if (OFI_LIKELY(dlist_empty(&cntr->trigger_list))) {
+	if (likely(dlist_empty(&cntr->trigger_list))) {
 		return;
 	}
 
-	 count = ofi_atomic_get32(&cntr->cnt);
+	 count = atomic_get(&cntr->cnt);
 
 	fastlock_acquire(&cntr->trigger_lock);
 	dlist_for_each_safe(&cntr->trigger_list, req, req2, dlist) {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014-2017, Cisco Systems, Inc. All rights reserved.
+ * Copyright (c) 2014-2016, Cisco Systems, Inc. All rights reserved.
  *
  * This software is available to you under a choice of one of two
  * licenses.  You may choose to be licensed under the terms of the GNU
@@ -55,9 +55,9 @@
 #include <rdma/fi_endpoint.h>
 #include <rdma/fi_rma.h>
 #include <rdma/fi_errno.h>
-#include "ofi.h"
-#include "ofi_enosys.h"
-#include "ofi_file.h"
+#include "fi.h"
+#include "fi_enosys.h"
+#include "fi_file.h"
 
 #include "fi_ext_usnic.h"
 #include "usnic_direct.h"
@@ -83,7 +83,7 @@ usdf_pep_bind(fid_t fid, fid_t bfid, uint64_t flags)
 			return -FI_EINVAL;
 		}
 		pep->pep_eq = eq_fidtou(bfid);
-		ofi_atomic_inc32(&pep->pep_eq->eq_refcnt);
+		atomic_inc(&pep->pep_eq->eq_refcnt);
 		break;
 
 	default:
@@ -120,9 +120,7 @@ usdf_pep_conn_info(struct usdf_connreq *crp)
 	sin->sin_addr.s_addr = reqp->creq_ipaddr;
 	sin->sin_port = reqp->creq_port;
 
-	ip->dest_addr = usdf_sin_to_format(pep->pep_info, sin,
-					   &ip->dest_addrlen);
-
+	ip->dest_addr = sin;
 	ip->handle = (fid_t) crp;
 	return ip;
 fail:
@@ -288,17 +286,13 @@ usdf_pep_listen(struct fid_pep *fpep)
 	struct usdf_pep *pep;
 	struct epoll_event ev;
 	struct usdf_fabric *fp;
-	struct sockaddr_in *sin;
 	socklen_t socklen;
 	int ret;
-	bool addr_format_str;
 
 	USDF_TRACE_SYS(EP_CTRL, "\n");
 
 	pep = pep_ftou(fpep);
 	fp = pep->pep_fabric;
-	addr_format_str = (pep->pep_info->addr_format == FI_ADDR_STR);
-	sin = NULL;
 
 	switch (pep->pep_state) {
 	case USDF_PEP_UNBOUND:
@@ -312,8 +306,7 @@ usdf_pep_listen(struct fid_pep *fpep)
 			"PEP already consumed, you may only fi_close() now\n");
 		return -FI_EOPBADSTATE;
 	default:
-		USDF_WARN_SYS(EP_CTRL, "unhandled case! (%d)\n",
-			      pep->pep_state);
+		USDF_WARN_SYS(EP_CTRL, "unhandled case!\n");
 		abort();
 	}
 
@@ -321,40 +314,26 @@ usdf_pep_listen(struct fid_pep *fpep)
 	 * already did the bind in a previous call to usdf_pep_listen() and the
 	 * listen(2) call failed */
 	if (pep->pep_state == USDF_PEP_UNBOUND) {
-		sin = usdf_format_to_sin(pep->pep_info, &pep->pep_src_addr);
-		if (sin == NULL)
-			goto fail;
-
-		ret = bind(pep->pep_sock, sin, sizeof(struct sockaddr_in));
+		ret = bind(pep->pep_sock, (struct sockaddr *)&pep->pep_src_addr,
+				sizeof(struct sockaddr_in));
 		if (ret == -1) {
-			goto fail;
+			return -errno;
 		}
 
 		/* Get the actual port (since we may have requested
 		 * port 0)
 		 */
-		socklen = sizeof(*sin);
-		ret = getsockname(pep->pep_sock, sin,
+		socklen = sizeof(pep->pep_src_addr);
+		ret = getsockname(pep->pep_sock, &pep->pep_src_addr,
 				&socklen);
 		if (ret == -1)
-			goto fail;
-
-		/* If it's FI_ADDR_STR, we have to update the string
-		 * with this method. (FI_SOCKADDR_IN got taken care of, above)
-		*/
-		if (addr_format_str) {
-			pep->pep_info->src_addrlen = USDF_ADDR_STR_LEN;
-			usdf_addr_tostr(sin, pep->pep_src_addr.addr_str,
-					&pep->pep_info->src_addrlen);
-		}
-
-		/* Update the state to bound. */
+			return -errno;
 		pep->pep_state = USDF_PEP_BOUND;
 	}
 
 	ret = listen(pep->pep_sock, pep->pep_backlog);
 	if (ret != 0) {
-		goto fail;
+		return -errno;
 	}
 	pep->pep_state = USDF_PEP_LISTENING;
 
@@ -364,15 +343,10 @@ usdf_pep_listen(struct fid_pep *fpep)
 	ev.data.ptr = &pep->pep_pollitem;
 	ret = epoll_ctl(fp->fab_epollfd, EPOLL_CTL_ADD, pep->pep_sock, &ev);
 	if (ret == -1) {
-		goto fail;
+		return -errno;
 	}
 
 	return 0;
-
-fail:
-	usdf_free_sin_if_needed(pep->pep_info, sin);
-
-	return -errno;
 }
 
 /* Register as a callback triggered by the socket becoming writeable. Write as
@@ -418,8 +392,8 @@ static int usdf_pep_reject(struct fid_pep *fpep, fid_t handle, const void *param
 
 	if (paramlen > USDF_MAX_CONN_DATA) {
 		USDF_WARN_SYS(EP_CTRL,
-			      "reject payload size %zu exceeds max %u\n",
-			      paramlen, USDF_MAX_CONN_DATA);
+				"reject payload size %zu exceeds max %zu\n",
+				paramlen, USDF_MAX_CONN_DATA);
 		return -FI_EINVAL;
 	}
 
@@ -516,7 +490,7 @@ usdf_pep_close(fid_t fid)
 	USDF_TRACE_SYS(EP_CTRL, "\n");
 
 	pep = pep_fidtou(fid);
-	if (ofi_atomic_get32(&pep->pep_refcnt) > 0) {
+	if (atomic_get(&pep->pep_refcnt) > 0) {
 		return -FI_EBUSY;
 	}
 
@@ -524,10 +498,9 @@ usdf_pep_close(fid_t fid)
 	close(pep->pep_sock);
 	pep->pep_sock = -1;
 	if (pep->pep_eq != NULL) {
-		ofi_atomic_dec32(&pep->pep_eq->eq_refcnt);
+		atomic_dec(&pep->pep_eq->eq_refcnt);
 	}
-	ofi_atomic_dec32(&pep->pep_fabric->fab_refcnt);
-	fi_freeinfo(pep->pep_info);
+	atomic_dec(&pep->pep_fabric->fab_refcnt);
 	free(pep);
 
 	return 0;
@@ -537,16 +510,14 @@ static int usdf_pep_getname(fid_t fid, void *addr, size_t *addrlen)
 {
 	int ret;
 	struct usdf_pep *pep;
-	struct fi_info *info;
 	size_t copylen;
 
 	USDF_TRACE_SYS(EP_CTRL, "\n");
 
 	ret = FI_SUCCESS;
 	pep = pep_fidtou(fid);
-	info = pep->pep_info;
 
-	copylen = info->src_addrlen;
+	copylen = sizeof(pep->pep_src_addr);
 	memcpy(addr, &pep->pep_src_addr, MIN(copylen, *addrlen));
 
 	if (*addrlen < copylen) {
@@ -562,50 +533,32 @@ static int usdf_pep_setname(fid_t fid, void *addr, size_t addrlen)
 {
 	int ret;
 	struct usdf_pep *pep;
-	struct fi_info *info;
-	struct sockaddr_in *sin;
 	uint32_t req_addr_be;
 	socklen_t socklen;
 	char namebuf[INET_ADDRSTRLEN];
 	char servbuf[INET_ADDRSTRLEN];
-	bool addr_format_str;
 
 	USDF_TRACE_SYS(EP_CTRL, "\n");
 
 	pep = pep_fidtou(fid);
-	info = pep->pep_info;
-	addr_format_str = (info->addr_format == FI_ADDR_STR);
-	sin = NULL;
-
 	if (pep->pep_state != USDF_PEP_UNBOUND) {
 		USDF_WARN_SYS(EP_CTRL, "PEP cannot be bound\n");
 		return -FI_EOPBADSTATE;
 	}
-
-	switch (info->addr_format) {
-	case FI_SOCKADDR:
-	case FI_SOCKADDR_IN:
-		/* It is possible for passive endpoint to not have src_addr. */
-		if (info->src_addr) {
-			ret = usdf_cm_addr_is_valid_sin(info->src_addr,
-							info->src_addrlen,
-							info->addr_format);
-			if (!ret)
-				return -FI_EINVAL;
-		}
-		break;
-	case FI_ADDR_STR:
-		break;
-	default:
+	if (((struct sockaddr *)addr)->sa_family != AF_INET) {
+		USDF_WARN_SYS(EP_CTRL, "non-AF_INET address given\n");
+		return -FI_EINVAL;
+	}
+	if (addrlen != sizeof(struct sockaddr_in)) {
+		USDF_WARN_SYS(EP_CTRL, "unexpected src_addrlen\n");
 		return -FI_EINVAL;
 	}
 
-	sin = usdf_format_to_sin(info, addr);
-	req_addr_be = sin->sin_addr.s_addr;
+	req_addr_be = ((struct sockaddr_in *)addr)->sin_addr.s_addr;
 
 	namebuf[0] = '\0';
 	servbuf[0] = '\0';
-	ret = getnameinfo((struct sockaddr *)sin, sizeof(struct sockaddr_in),
+	ret = getnameinfo((struct sockaddr*)addr, addrlen,
 		namebuf, sizeof(namebuf),
 		servbuf, sizeof(servbuf),
 		NI_NUMERICHOST|NI_NUMERICSERV);
@@ -619,32 +572,21 @@ static int usdf_pep_setname(fid_t fid, void *addr, size_t addrlen)
 		return -FI_EADDRNOTAVAIL;
 	}
 
-	ret = bind(pep->pep_sock, sin, sizeof(*sin));
+	ret = bind(pep->pep_sock, (struct sockaddr *)addr,
+		sizeof(struct sockaddr_in));
 	if (ret == -1) {
 		return -errno;
 	}
 	pep->pep_state = USDF_PEP_BOUND;
 
 	/* store the resulting port so that can implement getname() properly */
-	socklen = sizeof(*sin);
-	ret = getsockname(pep->pep_sock, sin, &socklen);
+	socklen = sizeof(pep->pep_src_addr);
+	ret = getsockname(pep->pep_sock, &pep->pep_src_addr, &socklen);
 	if (ret == -1) {
 		ret = -errno;
 		USDF_WARN_SYS(EP_CTRL, "getsockname failed %d (%s), PEP may be in bad state\n",
 			ret, strerror(-ret));
 		return ret;
-	}
-
-	if (addr_format_str) {
-		/* We have to reset src_addrlen here and
-		 * the conversion will update it to the correct len.
-		 */
-		info->src_addrlen = USDF_ADDR_STR_LEN;
-		usdf_addr_tostr(sin, pep->pep_src_addr.addr_str,
-				&info->src_addrlen);
-		free(sin);
-	} else {
-		memcpy(&pep->pep_src_addr, sin, sizeof(*sin));
 	}
 
 	return 0;
@@ -679,7 +621,6 @@ static struct fi_ops_cm usdf_pep_cm_ops = {
 	.accept = fi_no_accept,
 	.reject = usdf_pep_reject,
 	.shutdown = fi_no_shutdown,
-	.join = fi_no_join,
 };
 
 int
@@ -709,20 +650,21 @@ usdf_pep_open(struct fid_fabric *fabric, struct fi_info *info,
 
 	switch (info->addr_format) {
 	case FI_SOCKADDR:
-	case FI_SOCKADDR_IN:
-		/* It is possible for passive endpoint to not have src_addr. */
-		if (info->src_addr) {
-			ret = usdf_cm_addr_is_valid_sin(info->src_addr,
-							info->src_addrlen,
-							info->addr_format);
-			if (!ret)
-				return -FI_EINVAL;
+		if (((struct sockaddr *)info->src_addr)->sa_family != AF_INET) {
+			USDF_WARN_SYS(EP_CTRL, "non-AF_INET src_addr specified\n");
+			return -FI_EINVAL;
 		}
 		break;
-	case FI_ADDR_STR:
+	case FI_SOCKADDR_IN:
 		break;
 	default:
 		USDF_WARN_SYS(EP_CTRL, "unknown/unsupported addr_format\n");
+		return -FI_EINVAL;
+	}
+
+	if (info->src_addrlen &&
+			info->src_addrlen != sizeof(struct sockaddr_in)) {
+		USDF_WARN_SYS(EP_CTRL, "unexpected src_addrlen\n");
 		return -FI_EINVAL;
 	}
 
@@ -782,14 +724,11 @@ usdf_pep_open(struct fid_fabric *fabric, struct fi_info *info,
 
 		sin->sin_family = AF_INET;
 		sin->sin_addr.s_addr = fp->fab_dev_attrs->uda_ipaddr_be;
-
-		pep->pep_info->src_addr =
-			usdf_sin_to_format(pep->pep_info,
-					   sin, &pep->pep_info->src_addrlen);
+		pep->pep_info->src_addr = sin;
 	}
 
 	memcpy(&pep->pep_src_addr, pep->pep_info->src_addr,
-	       pep->pep_info->src_addrlen);
+			pep->pep_info->src_addrlen);
 
 	/* initialize connreq freelist */
 	ret = pthread_spin_init(&pep->pep_cr_lock, PTHREAD_PROCESS_PRIVATE);
@@ -807,8 +746,8 @@ usdf_pep_open(struct fid_fabric *fabric, struct fi_info *info,
 		goto fail;
 	}
 
-	ofi_atomic_initialize32(&pep->pep_refcnt, 0);
-	ofi_atomic_inc32(&fp->fab_refcnt);
+	atomic_initialize(&pep->pep_refcnt, 0);
+	atomic_inc(&fp->fab_refcnt);
 
 	*pep_o = pep_utof(pep);
 	return 0;

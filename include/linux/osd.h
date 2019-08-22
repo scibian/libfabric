@@ -38,8 +38,6 @@
 #include <byteswap.h>
 #include <endian.h>
 #include <sys/mman.h>
-#include <string.h>
-#include <assert.h>
 
 #include "unix/osd.h"
 #include "rdma/fi_errno.h"
@@ -54,3 +52,4 @@ static inline int ofi_shm_remap(struct util_shm *shm,
 }
 
 #endif /* _LINUX_OSD_H_ */
+
