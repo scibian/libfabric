@@ -1,3 +1,10 @@
+libfabric (1.4.0-0sci8+opa10.9u1) scibian8+opa10.9; urgency=medium
+
+  * Backport to scibian8+opa10.9
+  * Drop psm support
+
+ -- Rémi Palancher <remi-externe.palancher@edf.fr>  Thu, 22 Aug 2019 14:46:03 +0200
+
 libfabric (1.4.0-1sci9+opa10.9u1) scibian9+opa10.9; urgency=medium
 
   * New release for opa10.9
