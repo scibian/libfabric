@@ -1,46 +1,55 @@
 Source: libfabric
-Maintainer: Brian T. Smith <bsmith@systemfabricworks.com>
 Section: libs
-Priority: extra
-Standards-Version: 3.9.8
-Homepage: https://ofiwg.github.io/libfabric/
-Build-Depends: autoconf,
-               automake,
-               debhelper (>= 10),
+Priority: optional
+Maintainer: Debian OFED Infiniband packaging team <pkg-ofed-devel@lists.alioth.debian.org>
+Uploaders: Roland Fehrenbacher <rf@q-leap.de>,
+           Ana Beatriz Guerrero Lopez <ana@debian.org>
+Build-Depends: debhelper (>= 9),
                dh-autoreconf,
+               dpkg-dev (>= 1.13.19),
                libibverbs-dev,
-               libpsm2-dev,
-               librdmacm-dev,
-               libtool,
-
-Package: libfabric-dev
-Architecture: linux-any
-Section: libdevel
-Depends: libfabric1 (=${binary:Version}),
-         ${misc:Depends},
-Description: Development files for the libfabric library
- Libfabric is a core component of OFI. It is the library that defines and
- exports the user-space API of OFI, and is typically the only software that
- applications deal with directly. It works in conjunction with provider
- libraries, which are often integrated directly into libfabric.
- .
- This package provides libraries and headers for developing applications and
- libraries that use libfabric,
+               libpsm-infinipath1-dev,
+               librdmacm-dev
+Standards-Version: 3.9.8
+Homepage: http://ofiwg.github.io/libfabric/
+Vcs-Git: https://anonscm.debian.org/git/pkg-ofed/libfabric.git
+Vcs-Browser: https://anonscm.debian.org/cgit/pkg-ofed/libfabric.git
 
 Package: libfabric1
-Architecture: linux-any
-Pre-Depends: ${misc:Pre-Depends},
-Depends: ${misc:Depends},
-         ${shlibs:Depends},
-Description: User-space RDMA Fabric Interfaces
- OpenFabrics Interfaces (OFI) is a framework focused on exporting fabric
- communication services to applications. OFI is best described as a collection
- of libraries and applications used to export fabric services. The key
- components of OFI are: application interfaces, provider libraries, kernel
- services, daemons, and test applications.
+Architecture: amd64 i386
+Depends: ${misc:Depends}, ${shlibs:Depends}
+Breaks: libfabric-dev (<<1.3.0-4)
+Description: libfabric communication library
+ Libfabric is a communication library that exports interfaces for
+ fabric services to applications.  Libfabric is the core component
+ of the Open Fabrics Interfaces (OFI) framework.
  .
- Libfabric is a core component of OFI. It is the library that defines and
- exports the user-space API of OFI, and is typically the only software that
- applications deal with directly. It works in conjunction with provider
- libraries, which are often integrated directly into libfabric.
+ This package contains the shared libraries.
 
+Package: libfabric-dev
+Section: libdevel
+Architecture: amd64 i386
+Depends: libfabric1 (= ${binary:Version}), ${misc:Depends}
+Breaks: libfabric1 (<<1.3.0-4)
+Replaces: libfabric1 (<<1.3.0-4)
+Description: Development files for libfabric1
+ Libfabric is a communication library that exports interfaces for
+ fabric services to applications.  Libfabric is the core component
+ of the Open Fabrics Interfaces (OFI) framework.
+ .
+ This package is needed to compile programs against libfabric1.
+ It contains the header files and links needed for compiling.
+
+Package: libfabric1-dbg
+Section: debug
+Priority: extra
+Architecture: amd64 i386
+Depends: libfabric1 (= ${binary:Version}), ${misc:Depends}
+Description: Debugging symbols for libfabric1
+ Libfabric is a communication library that exports interfaces for
+ fabric services to applications.  Libfabric is the core component
+ of the Open Fabrics Interfaces (OFI) framework.
+ .
+ This package contains the debugging symbols associated with
+ libfabric1. They will automatically be used by gdb for debugging
+ libfabric1-related issues.

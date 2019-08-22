@@ -32,53 +32,61 @@
 
 #include <stdlib.h>
 #include <string.h>
-#include <ofi_mem.h>
+#include <fi_mem.h>
 #include "rxd.h"
 
 ssize_t	rxd_ep_readmsg(struct fid_ep *ep, const struct fi_msg_rma *msg,
 		       uint64_t flags)
 {
+	ssize_t ret;
+	uint64_t peer_addr;
 	struct rxd_ep *rxd_ep;
 	struct rxd_peer *peer;
 	struct rxd_tx_entry *tx_entry;
-	uint64_t peer_addr;
-	ssize_t ret;
+	rxd_ep = container_of(ep, struct rxd_ep, ep);
 
-	rxd_ep = container_of(ep, struct rxd_ep, util_ep.ep_fid);
-
-	peer_addr = rxd_av_dg_addr(rxd_ep_av(rxd_ep), msg->addr);
+	peer_addr = rxd_av_get_dg_addr(rxd_ep->av, msg->addr);
 	peer = rxd_ep_getpeer_info(rxd_ep, peer_addr);
 
-	fastlock_acquire(&rxd_ep->lock);
-	if (peer->state != CMAP_CONNECTED) {
-		ret = rxd_ep_connect(rxd_ep, peer, peer_addr);
-		fastlock_release(&rxd_ep->lock);
-		if (ret == -FI_EALREADY) {
-			rxd_ep->util_ep.progress(&rxd_ep->util_ep);
-			ret = -FI_EAGAIN;
-		}
-		return ret ? ret : -FI_EAGAIN;
+#if ENABLE_DEBUG
+	if (msg->iov_count > RXD_IOV_LIMIT ||
+	    msg->rma_iov_count > RXD_IOV_LIMIT)
+		return -FI_EINVAL;
+#endif
+
+	rxd_ep_lock_if_required(rxd_ep);
+	if (!peer->addr_published) {
+		ret = rxd_ep_post_conn_msg(rxd_ep, peer, peer_addr);
+		ret = (ret) ? ret : -FI_EAGAIN;
+		goto out;
 	}
 
-	tx_entry = rxd_tx_entry_alloc(rxd_ep, peer, peer_addr, flags,
-				      RXD_TX_READ_REQ);
+	tx_entry = rxd_tx_entry_acquire(rxd_ep, peer);
 	if (!tx_entry) {
 		ret = -FI_EAGAIN;
 		goto out;
 	}
 
+	dlist_init(&tx_entry->pkt_list);
+	tx_entry->op_type = RXD_TX_READ_REQ;
 	tx_entry->read_req.msg = *msg;
-	memcpy(&tx_entry->read_req.dst_iov[0], msg->msg_iov,
-	       sizeof(*msg->msg_iov)* msg->iov_count);
-	memcpy(&tx_entry->read_req.src_iov[0], msg->rma_iov,
-	       sizeof(*msg->rma_iov) * msg->rma_iov_count);
-	ret = rxd_ep_start_xfer(rxd_ep, peer, ofi_op_read_req, tx_entry);
+	tx_entry->flags = flags;
+	tx_entry->peer = peer_addr;
+	rxd_ep_copy_msg_iov(msg->msg_iov,
+			    &tx_entry->read_req.dst_iov[0], msg->iov_count);
+	rxd_ep_copy_rma_iov(msg->rma_iov,
+			    &tx_entry->read_req.src_iov[0], msg->rma_iov_count);
+	ret = rxd_ep_post_start_msg(rxd_ep, peer, ofi_op_read_req, tx_entry);
 	if (ret)
-		rxd_tx_entry_free(rxd_ep, tx_entry);
+		goto err;
 
+	dlist_insert_tail(&tx_entry->entry, &rxd_ep->tx_entry_list);
 out:
-	fastlock_release(&rxd_ep->lock);
+	rxd_ep_unlock_if_required(rxd_ep);
 	return ret;
+err:
+	rxd_tx_entry_release(rxd_ep, tx_entry);
+	goto out;
 }
 
 static ssize_t rxd_ep_read(struct fid_ep *ep, void *buf, size_t len,
@@ -117,7 +125,6 @@ static ssize_t rxd_ep_readv(struct fid_ep *ep, const struct iovec *iov,
 	struct fi_msg_rma msg;
 	struct fi_rma_iov rma_iov;
 
-	assert(count <= RXD_IOV_LIMIT);
 	memset(&msg, 0, sizeof(msg));
 	msg.msg_iov = iov;
 	msg.desc = desc;
@@ -126,6 +133,11 @@ static ssize_t rxd_ep_readv(struct fid_ep *ep, const struct iovec *iov,
 
 	rma_iov.addr = addr;
 	rma_iov.key = key;
+
+#if ENABLE_DEBUG
+	if (count > RXD_IOV_LIMIT)
+		return -FI_EINVAL;
+#endif
 
 	for (i = 0, len = 0; i < count; i++)
 		len += iov[i].iov_len;
@@ -141,46 +153,54 @@ static ssize_t rxd_ep_readv(struct fid_ep *ep, const struct iovec *iov,
 ssize_t	rxd_ep_writemsg(struct fid_ep *ep, const struct fi_msg_rma *msg,
 			uint64_t flags)
 {
+	ssize_t ret;
+	uint64_t peer_addr;
 	struct rxd_ep *rxd_ep;
 	struct rxd_peer *peer;
 	struct rxd_tx_entry *tx_entry;
-	uint64_t peer_addr;
-	ssize_t ret;
+	rxd_ep = container_of(ep, struct rxd_ep, ep);
 
-	rxd_ep = container_of(ep, struct rxd_ep, util_ep.ep_fid);
-	peer_addr = rxd_av_dg_addr(rxd_ep_av(rxd_ep), msg->addr);
+	peer_addr = rxd_av_get_dg_addr(rxd_ep->av, msg->addr);
 	peer = rxd_ep_getpeer_info(rxd_ep, peer_addr);
 
-	fastlock_acquire(&rxd_ep->lock);
-	if (peer->state != CMAP_CONNECTED) {
-		ret = rxd_ep_connect(rxd_ep, peer, peer_addr);
-		fastlock_release(&rxd_ep->lock);
-		if (ret == -FI_EALREADY) {
-			rxd_ep->util_ep.progress(&rxd_ep->util_ep);
-			ret = -FI_EAGAIN;
-		}
-		return ret ? ret : -FI_EAGAIN;
+#if ENABLE_DEBUG
+	if (msg->iov_count > RXD_IOV_LIMIT ||
+	    msg->rma_iov_count > RXD_IOV_LIMIT)
+		return -FI_EINVAL;
+#endif
+
+	rxd_ep_lock_if_required(rxd_ep);
+	if (!peer->addr_published) {
+		ret = rxd_ep_post_conn_msg(rxd_ep, peer, peer_addr);
+		ret = (ret) ? ret : -FI_EAGAIN;
+		goto out;
 	}
 
-	tx_entry = rxd_tx_entry_alloc(rxd_ep, peer, peer_addr, flags,
-				      RXD_TX_WRITE);
+	tx_entry = rxd_tx_entry_acquire(rxd_ep, peer);
 	if (!tx_entry) {
 		ret = -FI_EAGAIN;
 		goto out;
 	}
 
+	dlist_init(&tx_entry->pkt_list);
+	tx_entry->op_type = RXD_TX_WRITE;
 	tx_entry->write.msg = *msg;
-	memcpy(&tx_entry->write.src_iov[0], msg->msg_iov,
-	       sizeof(*msg->msg_iov) * msg->iov_count);
-	memcpy(&tx_entry->write.dst_iov[0], msg->rma_iov,
-	       sizeof(*msg->rma_iov) * msg->rma_iov_count);
-	ret = rxd_ep_start_xfer(rxd_ep, peer, ofi_op_write, tx_entry);
-	if (ret)
-		rxd_tx_entry_free(rxd_ep, tx_entry);
+	tx_entry->flags = flags;
+	tx_entry->peer = peer_addr;
+	rxd_ep_copy_msg_iov(msg->msg_iov, &tx_entry->write.src_iov[0], msg->iov_count);
+	rxd_ep_copy_rma_iov(msg->rma_iov, &tx_entry->write.dst_iov[0], msg->rma_iov_count);
 
+	ret = rxd_ep_post_start_msg(rxd_ep, peer, ofi_op_write, tx_entry);
+	if (ret)
+		goto err;
+
+	dlist_insert_tail(&tx_entry->entry, &rxd_ep->tx_entry_list);
 out:
-	fastlock_release(&rxd_ep->lock);
+	rxd_ep_unlock_if_required(rxd_ep);
 	return ret;
+err:
+	rxd_tx_entry_release(rxd_ep, tx_entry);
+	goto out;
 }
 
 static ssize_t rxd_ep_write(struct fid_ep *ep, const void *buf,
@@ -216,17 +236,21 @@ static ssize_t rxd_ep_writev(struct fid_ep *ep, const struct iovec *iov,
 			     void **desc, size_t count, fi_addr_t dest_addr,
 			     uint64_t addr, uint64_t key, void *context)
 {
-	size_t i;
+	int i;
 	size_t len;
 	struct fi_msg_rma msg;
 	struct fi_rma_iov rma_iov;
 
-	assert(count <= RXD_IOV_LIMIT);
 	memset(&msg, 0, sizeof(msg));
 	msg.msg_iov = iov;
 	msg.desc = desc;
 	msg.iov_count = count;
 	msg.rma_iov_count = 1;
+
+#if ENABLE_DEBUG
+	if (count > RXD_IOV_LIMIT)
+		return -FI_EINVAL;
+#endif
 
 	for (i = 0, len = 0; i < count; i++)
 		len += iov[i].iov_len;

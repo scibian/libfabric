@@ -50,6 +50,8 @@
 #include <errno.h>
 #include <sys/stat.h>
 
+#include <infiniband/driver.h>
+
 #include "usd.h"
 #include "usd_ib_sysfs.h"
 #include "usd_util.h"
@@ -180,7 +182,7 @@ usd_get_mac(
     struct usd_device *dev,
     uint8_t * mac)
 {
-    char name[PATH_MAX + 128];
+    char name[128];
     char gid[80];
     char *p;
     uint16_t v;
@@ -230,7 +232,7 @@ int
 usd_get_iface(
     struct usd_device *dev)
 {
-    char name[PATH_MAX + 128];
+    char name[128];
     struct usd_ib_dev *idp;
     int fd;
     int n;
@@ -267,7 +269,7 @@ usd_ib_sysfs_get_int(
     char *entry,
     int *result)
 {
-    char name[PATH_MAX + 128];
+    char name[128];
     char buf[32];
     struct usd_ib_dev *idp;
     int fd;
@@ -342,7 +344,7 @@ int
 usd_get_firmware(
     struct usd_device *dev)
 {
-    char name[PATH_MAX + 128];
+    char name[128];
     struct usd_ib_dev *idp;
     char *fw;
     int fd;

@@ -1,7 +1,6 @@
 /*
  * Copyright (c) 2016 Los Alamos National Security, LLC.
  *                    All rights reserved.
- * Copyright (c) 2017 Cray Inc. All rights reserved.
  *
  * This software is available to you under a choice of one of two
  * licenses.  You may choose to be licensed under the terms of the GNU
@@ -79,16 +78,12 @@ static gnix_mr_cache_attr_t _gnix_xpmem_default_mr_cache_attr = {
 		.soft_reg_limit      = 128,
 		.hard_reg_limit      = 16384,
 		.hard_stale_limit    = 128,
-#if HAVE_KDREG
 		.lazy_deregistration = 1,
-#else
-		.lazy_deregistration = 0,
-#endif
 		.reg_callback        = __gnix_xpmem_attach_seg,
 		.dereg_callback      = __gnix_xpmem_detach_seg,
 		.destruct_callback   = __gnix_xpmem_destroy_mr_cache,
 		.elem_size           = sizeof(struct gnix_xpmem_access_handle),
-		.smrn                = NULL,
+		.notifier            = NULL,
 };
 
 /*******************************************************************************
@@ -345,7 +340,7 @@ int _gnix_xpmem_access_hndl_get(struct gnix_xpmem_handle *xp_hndl,
 	/*
 	 * okay need to create an mr_cache for this apid
 	 */
-	if (OFI_UNLIKELY(entry == NULL)) {
+	if (unlikely(entry == NULL)) {
 
 		entry = calloc(1, sizeof *entry);
 		if (entry == NULL) {
@@ -455,7 +450,7 @@ int _gnix_xpmem_accessible(struct gnix_fid_ep *ep,
 	 * of the supplied address, return true, else false
 	 */
 
-	*accessible = (ep->src_addr.gnix_addr.device_addr ==
+	*accessible = (ep->my_name.gnix_addr.device_addr ==
 			addr.device_addr) ? true : false;
 
 	return FI_SUCCESS;

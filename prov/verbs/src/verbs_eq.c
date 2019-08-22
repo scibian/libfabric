@@ -32,161 +32,101 @@
 
 #include "config.h"
 
-#include <ofi_util.h>
 #include "fi_verbs.h"
 
-const struct fi_info *
-fi_ibv_get_verbs_info(const struct fi_info *ilist, const char *domain_name)
-{
-	const struct fi_info *fi;
-
-	for (fi = ilist; fi; fi = fi->next) {
-		if (!strcmp(fi->domain_attr->name, domain_name))
-			return fi;
-	}
-
-	return NULL;
-}
 
 static ssize_t
 fi_ibv_eq_readerr(struct fid_eq *eq, struct fi_eq_err_entry *entry,
 		  uint64_t flags)
 {
 	struct fi_ibv_eq *_eq;
-	uint32_t api_version;
-	void *err_data = NULL;
-	size_t err_data_size = 0;
 
 	_eq = container_of(eq, struct fi_ibv_eq, eq_fid.fid);
 	if (!_eq->err.err)
 		return 0;
 
-	api_version = _eq->fab->util_fabric.fabric_fid.api_version;
-
-	if ((FI_VERSION_GE(api_version, FI_VERSION(1, 5)))
-		&& entry->err_data && entry->err_data_size) {
-		err_data_size = MIN(entry->err_data_size, _eq->err.err_data_size);
-		err_data = _eq->err.err_data;
-	}
-
 	*entry = _eq->err;
-	if (err_data) {
-		memcpy(entry->err_data, err_data, err_data_size);
-		entry->err_data_size = err_data_size;
-	}
-
 	_eq->err.err = 0;
 	_eq->err.prov_errno = 0;
 	return sizeof(*entry);
 }
 
-static int
-fi_ibv_eq_cm_getinfo(struct fi_ibv_fabric *fab, struct rdma_cm_event *event,
-		     struct fi_info *pep_info, struct fi_info **info)
+/* TODO: This should copy the listening fi_info as the base */
+static struct fi_info *
+fi_ibv_eq_cm_getinfo(struct fi_ibv_fabric *fab, struct rdma_cm_event *event)
 {
-	struct fi_info *hints;
+	struct fi_info *info, *fi;
 	struct fi_ibv_connreq *connreq;
-	const char *devname = ibv_get_device_name(event->id->verbs->device);
-	int ret = -FI_ENOMEM;
 
-	if (!(hints = fi_dupinfo(pep_info)))
-		return -FI_ENOMEM;
+	fi = fi_ibv_get_verbs_info(ibv_get_device_name(event->id->verbs->device));
+	if (!fi)
+		return NULL;
 
-	/* Free src_addr info from pep to avoid addr reuse errors */
-	free(hints->src_addr);
-	hints->src_addr = NULL;
-	hints->src_addrlen = 0;
+	info = fi_dupinfo(fi);
+	if (!info)
+		return NULL;
 
-	if (!strcmp(hints->domain_attr->name, VERBS_ANY_DOMAIN)) {
-		free(hints->domain_attr->name);
-		if (!(hints->domain_attr->name = strdup(devname)))
-			goto err1;
-	} else {
-		if (strcmp(hints->domain_attr->name, devname)) {
-			VERBS_WARN(FI_LOG_EQ, "Passive endpoint domain: %s does"
-				   " not match device: %s where we got a "
-				   "connection request\n",
-				   hints->domain_attr->name, devname);
-			ret = -FI_ENODATA;
-			goto err1;
-		}
-	}
+	info->fabric_attr->fabric = &fab->fabric_fid;
+	if (!(info->fabric_attr->prov_name = strdup(VERBS_PROV_NAME)))
+		goto err;
 
-	if (!strcmp(hints->domain_attr->name, VERBS_ANY_FABRIC)) {
-		free(hints->fabric_attr->name);
-		hints->fabric_attr->name = NULL;
-	}
+	fi_ibv_update_info(NULL, info);
 
-	if (fi_ibv_getinfo(hints->fabric_attr->api_version, NULL, NULL, 0,
-			   hints, info))
-		goto err1;
+	info->src_addrlen = fi_ibv_sockaddr_len(rdma_get_local_addr(event->id));
+	if (!(info->src_addr = malloc(info->src_addrlen)))
+		goto err;
+	memcpy(info->src_addr, rdma_get_local_addr(event->id), info->src_addrlen);
 
-	assert(!(*info)->dest_addr);
+	info->dest_addrlen = fi_ibv_sockaddr_len(rdma_get_peer_addr(event->id));
+	if (!(info->dest_addr = malloc(info->dest_addrlen)))
+		goto err;
+	memcpy(info->dest_addr, rdma_get_peer_addr(event->id), info->dest_addrlen);
 
-	free((*info)->src_addr);
+	FI_INFO(&fi_ibv_prov, FI_LOG_CORE, "src_addr: %s:%d\n",
+		inet_ntoa(((struct sockaddr_in *)info->src_addr)->sin_addr),
+		ntohs(((struct sockaddr_in *)info->src_addr)->sin_port));
 
-	(*info)->src_addrlen = fi_ibv_sockaddr_len(rdma_get_local_addr(event->id));
-	if (!((*info)->src_addr = malloc((*info)->src_addrlen)))
-		goto err2;
-	memcpy((*info)->src_addr, rdma_get_local_addr(event->id), (*info)->src_addrlen);
-
-	(*info)->dest_addrlen = fi_ibv_sockaddr_len(rdma_get_peer_addr(event->id));
-	if (!((*info)->dest_addr = malloc((*info)->dest_addrlen)))
-		goto err2;
-	memcpy((*info)->dest_addr, rdma_get_peer_addr(event->id), (*info)->dest_addrlen);
-
-	ofi_straddr_dbg(&fi_ibv_prov, FI_LOG_EQ, "src", (*info)->src_addr);
-	ofi_straddr_dbg(&fi_ibv_prov, FI_LOG_EQ, "dst", (*info)->dest_addr);
+	FI_INFO(&fi_ibv_prov, FI_LOG_CORE, "dst_addr: %s:%d\n",
+		inet_ntoa(((struct sockaddr_in *)info->dest_addr)->sin_addr),
+		ntohs(((struct sockaddr_in *)info->dest_addr)->sin_port));
 
 	connreq = calloc(1, sizeof *connreq);
 	if (!connreq)
-		goto err2;
+		goto err;
 
 	connreq->handle.fclass = FI_CLASS_CONNREQ;
 	connreq->id = event->id;
-	(*info)->handle = &connreq->handle;
-	fi_freeinfo(hints);
-	return 0;
-err2:
-	fi_freeinfo(*info);
-err1:
-	fi_freeinfo(hints);
-	return ret;
+	info->handle = &connreq->handle;
+	return info;
+err:
+	fi_freeinfo(info);
+	return NULL;
 }
 
 static ssize_t
 fi_ibv_eq_cm_process_event(struct fi_ibv_eq *eq, struct rdma_cm_event *cma_event,
 	uint32_t *event, struct fi_eq_cm_entry *entry, size_t len)
 {
-	struct fi_ibv_pep *pep;
 	fid_t fid;
 	size_t datalen;
-	int ret;
 
 	fid = cma_event->id->context;
-	pep = container_of(fid, struct fi_ibv_pep, pep_fid);
 	switch (cma_event->event) {
+//	case RDMA_CM_EVENT_ADDR_RESOLVED:
+//		return 0;
+//	case RDMA_CM_EVENT_ROUTE_RESOLVED:
+//		return 0;
 	case RDMA_CM_EVENT_CONNECT_REQUEST:
 		*event = FI_CONNREQ;
-		ret = fi_ibv_eq_cm_getinfo(eq->fab, cma_event, pep->info, &entry->info);
-		if (ret) {
+		entry->info = fi_ibv_eq_cm_getinfo(eq->fab, cma_event);
+		if (!entry->info) {
 			rdma_destroy_id(cma_event->id);
-			if (ret == -FI_ENODATA)
-				return 0;
-			eq->err.err = -ret;
-			eq->err.prov_errno = ret;
-			goto err;
+			return 0;
 		}
 		break;
 	case RDMA_CM_EVENT_ESTABLISHED:
 		*event = FI_CONNECTED;
 		entry->info = NULL;
-		if (cma_event->id->qp->context->device->transport_type !=
-		    IBV_TRANSPORT_IWARP) {
-			ret = fi_ibv_set_rnr_timer(cma_event->id->qp);
-			if (ret)
-				return ret;
-		}
 		break;
 	case RDMA_CM_EVENT_DISCONNECTED:
 		*event = FI_SHUTDOWN;
@@ -196,18 +136,22 @@ fi_ibv_eq_cm_process_event(struct fi_ibv_eq *eq, struct rdma_cm_event *cma_event
 	case RDMA_CM_EVENT_ROUTE_ERROR:
 	case RDMA_CM_EVENT_CONNECT_ERROR:
 	case RDMA_CM_EVENT_UNREACHABLE:
-		eq->err.err = -cma_event->status;
-		goto err;
+		eq->err.fid = fid;
+		eq->err.err = cma_event->status;
+		return -FI_EAVAIL;
 	case RDMA_CM_EVENT_REJECTED:
+		eq->err.fid = fid;
 		eq->err.err = ECONNREFUSED;
-		eq->err.prov_errno = -cma_event->status;
-		goto err;
+		eq->err.prov_errno = cma_event->status;
+		return -FI_EAVAIL;
 	case RDMA_CM_EVENT_DEVICE_REMOVAL:
+		eq->err.fid = fid;
 		eq->err.err = ENODEV;
-		goto err;
+		return -FI_EAVAIL;
 	case RDMA_CM_EVENT_ADDR_CHANGE:
+		eq->err.fid = fid;
 		eq->err.err = EADDRNOTAVAIL;
-		goto err;
+		return -FI_EAVAIL;
 	default:
 		return 0;
 	}
@@ -217,12 +161,9 @@ fi_ibv_eq_cm_process_event(struct fi_ibv_eq *eq, struct rdma_cm_event *cma_event
 	if (datalen)
 		memcpy(entry->data, cma_event->param.conn.private_data, datalen);
 	return sizeof(*entry) + datalen;
-err:
-	eq->err.fid = fid;
-	return -FI_EAVAIL;
 }
 
-ssize_t fi_ibv_eq_write_event(struct fi_ibv_eq *eq, uint32_t event,
+static ssize_t fi_ibv_eq_write_event(struct fi_ibv_eq *eq, uint32_t event,
 		const void *buf, size_t len)
 {
 	struct fi_ibv_eq_entry *entry;
@@ -242,8 +183,8 @@ ssize_t fi_ibv_eq_write_event(struct fi_ibv_eq *eq, uint32_t event,
 	return len;
 }
 
-static ssize_t fi_ibv_eq_write(struct fid_eq *eq_fid, uint32_t event,
-			       const void *buf, size_t len, uint64_t flags)
+ssize_t fi_ibv_eq_write(struct fid_eq *eq_fid, uint32_t event,
+		const void *buf, size_t len, uint64_t flags)
 {
 	struct fi_ibv_eq *eq;
 
@@ -306,19 +247,15 @@ fi_ibv_eq_read(struct fid_eq *eq_fid, uint32_t *event,
 		if (ret)
 			return -errno;
 
-		if (len < sizeof(struct fi_eq_cm_entry)) {
-			ret = -FI_ETOOSMALL;
-			goto ack;
-		}
+		if (len < sizeof(struct fi_eq_cm_entry))
+			return -FI_ETOOSMALL;
 
 		ret = fi_ibv_eq_cm_process_event(eq, cma_event, event,
 				(struct fi_eq_cm_entry *)buf, len);
-		if (ret < 0)
-			goto ack;
 
 		if (flags & FI_PEEK)
-			ret = fi_ibv_eq_write_event(eq, *event, buf, len);
-ack:
+			fi_ibv_eq_write_event(eq, *event, buf, len);
+
 		rdma_ack_cm_event(cma_event);
 		return ret;
 	}
@@ -395,16 +332,15 @@ static int fi_ibv_eq_close(fid_t fid)
 	struct fi_ibv_eq_entry *entry;
 
 	eq = container_of(fid, struct fi_ibv_eq, eq_fid.fid);
-	/* TODO: use util code, if possible, and add ref counting */
 
 	if (eq->channel)
 		rdma_destroy_event_channel(eq->channel);
 
 	close(eq->epfd);
 
-	while (!dlistfd_empty(&eq->list_head)) {
-		entry = container_of(eq->list_head.list.next,
-				     struct fi_ibv_eq_entry, item);
+	fastlock_acquire(&eq->lock);
+	while(!dlistfd_empty(&eq->list_head)) {
+		entry = container_of(eq->list_head.list.next, struct fi_ibv_eq_entry, item);
 		dlistfd_remove(eq->list_head.list.next, &eq->list_head);
 		free(entry);
 	}
@@ -435,13 +371,12 @@ int fi_ibv_eq_open(struct fid_fabric *fabric, struct fi_eq_attr *attr,
 	if (!_eq)
 		return -ENOMEM;
 
-	_eq->fab = container_of(fabric, struct fi_ibv_fabric,
-				util_fabric.fabric_fid);
+	_eq->fab = container_of(fabric, struct fi_ibv_fabric, fabric_fid);
 
 	fastlock_init(&_eq->lock);
 	ret = dlistfd_head_init(&_eq->list_head);
 	if (ret) {
-		VERBS_INFO(FI_LOG_EQ, "Unable to initialize dlistfd\n");
+		FI_INFO(&fi_ibv_prov, FI_LOG_EQ, "Unable to initialize dlistfd\n");
 		goto err1;
 	}
 

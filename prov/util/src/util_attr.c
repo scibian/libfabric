@@ -1,6 +1,5 @@
 /*
  * Copyright (c) 2015-2016 Intel Corporation. All rights reserved.
- * Copyright (c) 2018, Cisco Systems, Inc. All rights reserved.
  *
  * This software is available to you under a choice of one of two
  * licenses.  You may choose to be licensed under the terms of the GNU
@@ -33,10 +32,21 @@
 
 #include <stdio.h>
 
-#include <ofi_util.h>
+#include <fi_util.h>
 
-#define OFI_MSG_CAPS	(FI_SEND | FI_RECV)
-#define OFI_RMA_CAPS	(FI_READ | FI_WRITE | FI_REMOTE_READ | FI_REMOTE_WRITE)
+#define FI_INFO_FIELD(provider, prov, user, prov_str, user_str, field, type)	\
+	do {									\
+		FI_INFO(provider, FI_LOG_CORE, prov_str ": %s\n",		\
+				fi_tostr(&prov->field, type));			\
+		FI_INFO(provider, FI_LOG_CORE, user_str ": %s\n",		\
+				fi_tostr(&user->field, type));			\
+	} while (0)
+
+#define FI_INFO_CAPS(provider, prov, user, field, type) \
+	FI_INFO_FIELD(provider, prov, user, "Supported", "Requested", field, type)
+
+#define FI_INFO_MODE(provider, prov, user) \
+	FI_INFO_FIELD(provider, prov, user, "Expected", "Given", mode, FI_TYPE_MODE)
 
 static int fi_valid_addr_format(uint32_t prov_format, uint32_t user_format)
 {
@@ -61,83 +71,41 @@ static int fi_valid_addr_format(uint32_t prov_format, uint32_t user_format)
 	}
 }
 
-/*
-char *ofi_strdup_head(const char *str)
+char *ofi_strdup_less_prefix(char *name, char *prefix)
 {
-	char *delim;
-	delim = strchr(str, OFI_NAME_DELIM);
-	return delim ? strndup(str, delim - str) : strdup(str);
+	return strdup(name + strlen(prefix) + 1);
 }
 
-char *ofi_strdup_tail(const char *str)
+char *ofi_strdup_add_prefix(char *name, char *prefix)
 {
-	char *delim;
-	delim = strchr(str, OFI_NAME_DELIM);
-	return delim ? strup(delim + 1) : strdup(str);
-}
-*/
+	char *prefix_name;
+	char *base = "";
+	ssize_t size;
+	int ret;
 
-char *ofi_strdup_append(const char *head, const char *tail)
-{
-	char *str;
-	size_t len;
+	if (name)
+		base = name;
 
-	len = strlen(head) + strlen(tail) + 2;
-	str = malloc(len);
-	if (str)
-		sprintf(str, "%s%c%s", head, OFI_NAME_DELIM, tail);
-	return str;
-}
+	size = snprintf(NULL, 0, "%s_%s", prefix, base) + 1;
+	if (size < 0)
+		return NULL;
 
-static int ofi_has_util_prefix(const char *str)
-{
-	return !strncasecmp(str, OFI_UTIL_PREFIX, strlen(OFI_UTIL_PREFIX));
-}
+	prefix_name = calloc(size, sizeof(*prefix_name));
+	if (!prefix_name)
+		return NULL;
 
-const char *ofi_util_name(const char *str, size_t *len)
-{
-	char *delim;
+	ret = snprintf(prefix_name, size, "%s_%s", prefix, base);
+	if (ret < 0 || ret > size)
+		goto err;
 
-	delim = strchr(str, OFI_NAME_DELIM);
-	if (delim) {
-		if (ofi_has_util_prefix(delim + 1)) {
-			*len = strlen(delim + 1);
-			return delim + 1;
-		} else if (ofi_has_util_prefix(str)) {
-			*len = delim - str;
-			return str;
-		}
-	} else if (ofi_has_util_prefix(str)) {
-		*len = strlen(str);
-		return str;
-	}
-	*len = 0;
+	return prefix_name;
+
+err:
+	free(prefix_name);
 	return NULL;
 }
 
-const char *ofi_core_name(const char *str, size_t *len)
-{
-	char *delim;
-
-	delim = strchr(str, OFI_NAME_DELIM);
-	if (delim) {
-		if (!ofi_has_util_prefix(delim + 1)) {
-			*len = strlen(delim + 1);
-			return delim + 1;
-		} else if (!ofi_has_util_prefix(str)) {
-			*len = delim - str;
-			return str;
-		}
-	} else if (!ofi_has_util_prefix(str)) {
-		*len = strlen(str);
-		return str;
-	}
-	*len = 0;
-	return NULL;
-
-}
-
-static int ofi_dup_addr(const struct fi_info *info, struct fi_info *dup)
+static int ofix_dup_addr(struct fi_info *info, struct fi_info *dup)
 {
 	dup->addr_format = info->addr_format;
 	if (info->src_addr) {
@@ -158,229 +126,138 @@ static int ofi_dup_addr(const struct fi_info *info, struct fi_info *dup)
 	return 0;
 }
 
-static int ofi_info_to_core(uint32_t version, const struct fi_provider *prov,
-			    const struct fi_info *util_info,
-			    ofi_alter_info_t info_to_core,
-			    struct fi_info **core_hints)
+static int ofix_alter_layer_info(const struct fi_provider *prov,
+		const struct fi_info *prov_info,
+		struct fi_info *layer_info, ofi_alter_info_t alter_layer_info,
+		struct fi_info **base_info)
 {
-	const char *core_name;
-	size_t len;
-
-	if (!(*core_hints = fi_allocinfo()))
+	if (!(*base_info = fi_allocinfo()))
 		return -FI_ENOMEM;
 
-	if (info_to_core(version, util_info, *core_hints))
+	if (alter_layer_info(layer_info, *base_info))
 		goto err;
 
-	if (!util_info)
+	if (!layer_info)
 		return 0;
 
-	if (ofi_dup_addr(util_info, *core_hints))
+	if (ofix_dup_addr(layer_info, *base_info))
 		goto err;
 
-	if (util_info->fabric_attr) {
-		if (util_info->fabric_attr->name) {
-			(*core_hints)->fabric_attr->name =
-				strdup(util_info->fabric_attr->name);
-			if (!(*core_hints)->fabric_attr->name) {
-				FI_WARN(prov, FI_LOG_FABRIC,
-					"Unable to allocate fabric name\n");
-				goto err;
-			}
-		}
-
-		if (util_info->fabric_attr->prov_name) {
-			core_name = ofi_core_name(util_info->fabric_attr->
-						  prov_name, &len);
-			if (core_name) {
-				(*core_hints)->fabric_attr->prov_name =
-					strndup(core_name, len);
-				if (!(*core_hints)->fabric_attr->prov_name) {
-					FI_WARN(prov, FI_LOG_FABRIC,
-						"Unable to alloc prov name\n");
-					goto err;
-				}
-			}
-		}
-	}
-
-	if (util_info->domain_attr && util_info->domain_attr->name) {
-		(*core_hints)->domain_attr->name =
-			strdup(util_info->domain_attr->name);
-		if (!(*core_hints)->domain_attr->name) {
-			FI_WARN(prov, FI_LOG_FABRIC,
-				"Unable to allocate domain name\n");
-			goto err;
-		}
+	if (layer_info->domain_attr && layer_info->domain_attr->name &&
+			!((*base_info)->domain_attr->name =
+			ofi_strdup_less_prefix(layer_info->domain_attr->name,
+			prov_info->domain_attr->name))) {
+		FI_WARN(prov, FI_LOG_FABRIC,
+				"Unable to alter layer_info domain name\n");
+		goto err;
 	}
 	return 0;
-
 err:
-	fi_freeinfo(*core_hints);
+	fi_freeinfo(*base_info);
 	return -FI_ENOMEM;
 }
 
-static int ofi_info_to_util(uint32_t version, const struct fi_provider *prov,
-			    struct fi_info *core_info,
-			    ofi_alter_info_t info_to_util,
-			    struct fi_info **util_info)
+static int ofix_alter_base_info(const struct fi_provider *prov,
+		const struct fi_info *prov_info,
+		struct fi_info *base_info, ofi_alter_info_t alter_base_info,
+		struct fi_info **layer_info)
 {
-	if (!(*util_info = fi_allocinfo()))
+	if (!(*layer_info = fi_allocinfo()))
 		return -FI_ENOMEM;
 
-	if (info_to_util(version, core_info, *util_info))
+	if (alter_base_info(base_info, *layer_info))
 		goto err;
 
-	if (ofi_dup_addr(core_info, *util_info))
+	if (ofix_dup_addr(base_info, *layer_info))
 		goto err;
 
-	/* Release 1.4 brought standardized domain names across IP based
-	 * providers. Before this release, the usNIC provider would return a
-	 * NULL domain name from fi_getinfo. For compatibility reasons, allow a
-	 * NULL domain name when apps are requesting version < 1.4.
-	 */
-	assert(FI_VERSION_LT(1, 4) || core_info->domain_attr->name);
-
-	if (core_info->domain_attr->name) {
-		(*util_info)->domain_attr->name =
-			strdup(core_info->domain_attr->name);
-
-		if (!(*util_info)->domain_attr->name) {
-			FI_WARN(prov, FI_LOG_FABRIC,
-				"Unable to allocate domain name\n");
-			goto err;
-		}
-	}
-
-	(*util_info)->fabric_attr->name = strdup(core_info->fabric_attr->name);
-	if (!(*util_info)->fabric_attr->name) {
+	if (!((*layer_info)->domain_attr->name =
+				ofi_strdup_add_prefix(base_info->domain_attr->name,
+					prov_info->domain_attr->name))) {
 		FI_WARN(prov, FI_LOG_FABRIC,
-			"Unable to allocate fabric name\n");
+				"Unable to alter base prov domain name\n");
 		goto err;
 	}
-
-	(*util_info)->fabric_attr->prov_name = strdup(core_info->fabric_attr->
-						      prov_name);
-	if (!(*util_info)->fabric_attr->prov_name) {
-		FI_WARN(prov, FI_LOG_FABRIC,
-			"Unable to allocate fabric name\n");
+	(*layer_info)->fabric_attr->prov_version = prov->version;
+	if (!((*layer_info)->fabric_attr->name = strdup(base_info->fabric_attr->name)))
 		goto err;
-	}
 
 	return 0;
 err:
-	fi_freeinfo(*util_info);
+	fi_freeinfo(*layer_info);
 	return -FI_ENOMEM;
-}
-
-int ofi_get_core_info(uint32_t version, const char *node, const char *service,
-		      uint64_t flags, const struct util_prov *util_prov,
-		      const struct fi_info *util_hints, ofi_alter_info_t info_to_core,
-		      struct fi_info **core_info)
-{
-	struct fi_info *core_hints = NULL;
-	int ret;
-
-	ret = ofi_prov_check_info(util_prov, version, util_hints);
-	if (ret)
-		return ret;
-
-	ret = ofi_info_to_core(version, util_prov->prov, util_hints, info_to_core,
-			       &core_hints);
-	if (ret)
-		return ret;
-
-	FI_DBG(util_prov->prov, FI_LOG_CORE, "--- Begin ofi_get_core_info ---\n");
-
-	ret = fi_getinfo(version, node, service, flags | OFI_CORE_PROV_ONLY,
-			 core_hints, core_info);
-
-	FI_DBG(util_prov->prov, FI_LOG_CORE, "--- End ofi_get_core_info ---\n");
-
-	fi_freeinfo(core_hints);
-	return ret;
 }
 
 int ofix_getinfo(uint32_t version, const char *node, const char *service,
-		 uint64_t flags, const struct util_prov *util_prov,
-		 const struct fi_info *hints, ofi_alter_info_t info_to_core,
-		 ofi_alter_info_t info_to_util, struct fi_info **info)
+			uint64_t flags, const struct util_prov *util_prov,
+			struct fi_info *hints,
+			ofi_alter_info_t alter_layer_info,
+			ofi_alter_info_t alter_base_info,
+			int get_base_info, struct fi_info **info)
 {
-	struct fi_info *core_info, *util_info, *cur, *tail;
+	struct fi_info *base_hints = NULL, *base_info;
+	struct fi_info *temp = NULL, *fi, *tail = NULL;
 	int ret;
 
-	ret = ofi_get_core_info(version, node, service, flags, util_prov,
-				hints, info_to_core, &core_info);
+	ret = fi_check_info(util_prov, hints, FI_MATCH_PREFIX);
 	if (ret)
-		return ret;
+		goto err1;
 
-	*info = tail = NULL;
-	for (cur = core_info; cur; cur = cur->next) {
-		ret = ofi_info_to_util(version, util_prov->prov, cur,
-				       info_to_util, &util_info);
-		if (ret) {
-			fi_freeinfo(*info);
-			break;
+	ret = ofix_alter_layer_info(util_prov->prov, util_prov->info, hints,
+			alter_layer_info, &base_hints);
+	if (ret)
+		goto err1;
+
+	ret = fi_getinfo(version, node, service, flags, base_hints, &base_info);
+	if (ret)
+		goto err2;
+
+	if (get_base_info) {
+		*info = base_info;
+	} else {
+		for (fi = base_info; fi; fi = fi->next) {
+			ret = ofix_alter_base_info(util_prov->prov, util_prov->info,
+					fi, alter_base_info, &temp);
+			if (ret)
+				goto err3;
+			ofi_alter_info(temp, hints);
+			if (!tail)
+				*info = temp;
+			else
+				tail->next = temp;
+			tail = temp;
 		}
-
-		ofi_alter_info(util_info, hints, version);
-		if (!*info)
-			*info = util_info;
-		else
-			tail->next = util_info;
-		tail = util_info;
+		fi_freeinfo(base_info);
 	}
-	fi_freeinfo(core_info);
-	return ret;
+	fi_freeinfo(base_hints);
+	return 0;
+err3:
+	fi_freeinfo(*info);
+err2:
+	fi_freeinfo(base_hints);
+err1:
+	return -FI_ENODATA;
 }
 
-/* Caller should use only fabric_attr in returned core_info */
-int ofi_get_core_info_fabric(struct fi_fabric_attr *util_attr,
-			     struct fi_info **core_info)
+static int fi_check_name(char *user_name, char *prov_name, enum fi_match_type type)
 {
-	struct fi_info hints;
-	const char *core_name;
-	size_t len;
-	int ret;
+	return (type == FI_MATCH_PREFIX) ?
+		strncasecmp(user_name, prov_name, strlen(prov_name)) :
+		strcasecmp(prov_name, user_name);
+}
 
-	core_name = ofi_core_name(util_attr->prov_name, &len);
-	if (!core_name)
+int fi_check_fabric_attr(const struct fi_provider *prov,
+			 const struct fi_fabric_attr *prov_attr,
+			 const struct fi_fabric_attr *user_attr,
+			 enum fi_match_type type)
+{
+	if (user_attr->name && fi_check_name(user_attr->name, prov_attr->name, type)) {
+		FI_INFO(prov, FI_LOG_CORE, "Unknown fabric name\n");
 		return -FI_ENODATA;
-
-	memset(&hints, 0, sizeof hints);
-	if (!(hints.fabric_attr = calloc(1, sizeof(*hints.fabric_attr))))
-		return -FI_ENOMEM;
-
-	hints.fabric_attr->name = util_attr->name;
-	hints.fabric_attr->api_version = util_attr->api_version;
-	if (!(hints.fabric_attr->prov_name = strndup(core_name, len))) {
-		ret = -FI_ENOMEM;
-		goto out;
 	}
-	hints.mode = ~0;
-
-	ret = fi_getinfo(util_attr->api_version, NULL, NULL, OFI_CORE_PROV_ONLY,
-	                 &hints, core_info);
-
-	free(hints.fabric_attr->prov_name);
-out:
-	free(hints.fabric_attr);
-	return ret;
-}
-
-int ofi_check_fabric_attr(const struct fi_provider *prov,
-			  const struct fi_fabric_attr *prov_attr,
-			  const struct fi_fabric_attr *user_attr)
-{
-	/* Provider names are checked by the framework */
 
 	if (user_attr->prov_version > prov_attr->prov_version) {
 		FI_INFO(prov, FI_LOG_CORE, "Unsupported provider version\n");
-		return -FI_ENODATA;
-	}
-
-	if (FI_VERSION_LT(user_attr->api_version, prov_attr->api_version)) {
-		FI_INFO(prov, FI_LOG_CORE, "Unsupported api version\n");
 		return -FI_ENODATA;
 	}
 
@@ -444,88 +321,13 @@ static int fi_resource_mgmt_level(enum fi_resource_mgmt rm_model)
 	}
 }
 
-/*
- * Remove unneeded MR mode bits based on the requested capability bits.
- */
-static int ofi_cap_mr_mode(uint64_t info_caps, int mr_mode)
+int fi_check_domain_attr(const struct fi_provider *prov,
+			 const struct fi_domain_attr *prov_attr,
+			 const struct fi_domain_attr *user_attr,
+			 enum fi_match_type type)
 {
-	if (!ofi_rma_target_allowed(info_caps)) {
-		if (!(mr_mode & FI_MR_LOCAL))
-			return 0;
-
-		mr_mode &= ~OFI_MR_MODE_RMA_TARGET;
-	}
-
-	return mr_mode & ~(FI_MR_BASIC | FI_MR_SCALABLE);
-}
-
-/*
- * Providers should set v1.0 registration modes (FI_MR_BASIC and
- * FI_MR_SCALABLE) that they support, along with all required modes.
- */
-int ofi_check_mr_mode(const struct fi_provider *prov, uint32_t api_version,
-		      int prov_mode, const struct fi_info *user_info)
-{
-	int user_mode = user_info->domain_attr->mr_mode;
-	int ret = -FI_ENODATA;
-
-	if ((prov_mode & FI_MR_LOCAL) &&
-	    !((user_info->mode & FI_LOCAL_MR) || (user_mode & FI_MR_LOCAL)))
-		goto out;
-
-	if (FI_VERSION_LT(api_version, FI_VERSION(1, 5))) {
-		switch (user_mode) {
-		case FI_MR_UNSPEC:
-			if (!(prov_mode & (FI_MR_SCALABLE | FI_MR_BASIC)))
-				goto out;
-			break;
-		case FI_MR_BASIC:
-			if (!(prov_mode & FI_MR_BASIC))
-				goto out;
-			break;
-		case FI_MR_SCALABLE:
-			if (!(prov_mode & FI_MR_SCALABLE))
-				goto out;
-			break;
-		default:
-			goto out;
-		}
-	} else {
-		if (user_mode & FI_MR_BASIC) {
-			if ((user_mode & ~FI_MR_BASIC) ||
-			    !(prov_mode & FI_MR_BASIC))
-				goto out;
-		} else if (user_mode & FI_MR_SCALABLE) {
-			if ((user_mode & ~FI_MR_SCALABLE) ||
-			    !(prov_mode & FI_MR_SCALABLE))
-				goto out;
-		} else {
-			prov_mode = ofi_cap_mr_mode(user_info->caps, prov_mode);
-			if ((user_mode & prov_mode) != prov_mode)
-				goto out;
-		}
-	}
-
-	ret = 0;
-out:
-	if (ret) {
-		FI_INFO(prov, FI_LOG_CORE, "Invalid memory registration mode\n");
-		FI_INFO_MR_MODE(prov, prov_mode, user_mode);
-	}
-
-	return ret;
-}
-
-int ofi_check_domain_attr(const struct fi_provider *prov, uint32_t api_version,
-			  const struct fi_domain_attr *prov_attr,
-			  const struct fi_info *user_info)
-{
-	const struct fi_domain_attr *user_attr = user_info->domain_attr;
-
-	if (prov_attr->name && user_attr->name &&
-	    strcasecmp(user_attr->name, prov_attr->name)) {
+	if (user_attr->name && fi_check_name(user_attr->name, prov_attr->name, type)) {
 		FI_INFO(prov, FI_LOG_CORE, "Unknown domain name\n");
-		FI_INFO_NAME(prov, prov_attr, user_attr);
 		return -FI_ENODATA;
 	}
 
@@ -560,86 +362,34 @@ int ofi_check_domain_attr(const struct fi_provider *prov, uint32_t api_version,
 	   	return -FI_ENODATA;
 	}
 
+	if (user_attr->mr_mode && (user_attr->mr_mode != prov_attr->mr_mode)) {
+		FI_INFO(prov, FI_LOG_CORE, "Invalid memory registration mode\n");
+		return -FI_ENODATA;
+	}
+
 	if (user_attr->cq_data_size > prov_attr->cq_data_size) {
 		FI_INFO(prov, FI_LOG_CORE, "CQ data size too large\n");
-		FI_INFO_CHECK_VAL(prov, prov_attr, user_attr, cq_data_size);
-		return -FI_ENODATA;
-	}
-
-	if (ofi_check_mr_mode(prov, api_version, prov_attr->mr_mode, user_info))
-		return -FI_ENODATA;
-
-	if (user_attr->max_ep_stx_ctx > prov_attr->max_ep_stx_ctx) {
-		FI_INFO(prov, FI_LOG_CORE, "max_ep_stx_ctx greater than supported\n");
-		FI_INFO_CHECK_VAL(prov, prov_attr, user_attr, max_ep_stx_ctx);
-	}
-
-	if (user_attr->max_ep_srx_ctx > prov_attr->max_ep_srx_ctx) {
-		FI_INFO(prov, FI_LOG_CORE, "max_ep_srx_ctx greater than supported\n");
-		FI_INFO_CHECK_VAL(prov, prov_attr, user_attr, max_ep_srx_ctx);
-	}
-
-	/* following checks only apply to api 1.5 and beyond */
-	if (FI_VERSION_LT(api_version, FI_VERSION(1, 5)))
-		return 0;
-
-	if (user_attr->cntr_cnt > prov_attr->cntr_cnt) {
-		FI_INFO(prov, FI_LOG_CORE, "Cntr count too large\n");
-		return -FI_ENODATA;
-	}
-
-	if (user_attr->mr_iov_limit > prov_attr->mr_iov_limit) {
-		FI_INFO(prov, FI_LOG_CORE, "MR iov limit too large\n");
-		FI_INFO_CHECK_VAL(prov, prov_attr, user_attr, mr_iov_limit);
-		return -FI_ENODATA;
-	}
-
-	if (user_attr->caps & ~(prov_attr->caps)) {
-		FI_INFO(prov, FI_LOG_CORE, "Requested domain caps not supported\n");
-		FI_INFO_CHECK(prov, prov_attr, user_attr, caps, FI_TYPE_CAPS);
-		return -FI_ENODATA;
-	}
-
-	if ((user_attr->mode & prov_attr->mode) != prov_attr->mode) {
-		FI_INFO(prov, FI_LOG_CORE, "Required domain mode missing\n");
-		FI_INFO_MODE(prov, prov_attr->mode, user_attr->mode);
-		return -FI_ENODATA;
-	}
-
-	if (user_attr->max_err_data > prov_attr->max_err_data) {
-		FI_INFO(prov, FI_LOG_CORE, "Max err data too large\n");
-		FI_INFO_CHECK_VAL(prov, prov_attr, user_attr, max_err_data);
-		return -FI_ENODATA;
-	}
-
-	if (user_attr->mr_cnt > prov_attr->mr_cnt) {
-		FI_INFO(prov, FI_LOG_CORE, "MR count too large\n");
-		FI_INFO_CHECK_VAL(prov, prov_attr, user_attr, mr_cnt);
 		return -FI_ENODATA;
 	}
 
 	return 0;
 }
 
-int ofi_check_ep_attr(const struct util_prov *util_prov, uint32_t api_version,
-		      const struct fi_info *prov_info,
-		      const struct fi_info *user_info)
+int fi_check_ep_attr(const struct util_prov *util_prov,
+		     const struct fi_ep_attr *user_attr)
 {
-	const struct fi_ep_attr *prov_attr = prov_info->ep_attr;
-	const struct fi_ep_attr *user_attr = user_info->ep_attr;
 	const struct fi_provider *prov = util_prov->prov;
+	const struct fi_ep_attr *prov_attr = util_prov->info->ep_attr;
 
-	if ((user_attr->type != FI_EP_UNSPEC) &&
-	    (user_attr->type != prov_attr->type)) {
+	if (user_attr->type && (user_attr->type != prov_attr->type)) {
 		FI_INFO(prov, FI_LOG_CORE, "Unsupported endpoint type\n");
-		FI_INFO_CHECK(prov, prov_attr, user_attr, type, FI_TYPE_EP_TYPE);
+		FI_INFO_CAPS(prov, prov_attr, user_attr, type, FI_TYPE_EP_TYPE);
 		return -FI_ENODATA;
 	}
 
-	if ((user_attr->protocol != FI_PROTO_UNSPEC) &&
-	    (user_attr->protocol != prov_attr->protocol)) {
+	if (user_attr->protocol && (user_attr->protocol != prov_attr->protocol)) {
 		FI_INFO(prov, FI_LOG_CORE, "Unsupported protocol\n");
-		FI_INFO_CHECK(prov, prov_attr, user_attr, protocol, FI_TYPE_PROTOCOL);
+		FI_INFO_CAPS(prov, prov_attr, user_attr, protocol, FI_TYPE_PROTOCOL);
 		return -FI_ENODATA;
 	}
 
@@ -651,325 +401,155 @@ int ofi_check_ep_attr(const struct util_prov *util_prov, uint32_t api_version,
 
 	if (user_attr->max_msg_size > prov_attr->max_msg_size) {
 		FI_INFO(prov, FI_LOG_CORE, "Max message size too large\n");
-		FI_INFO_CHECK_VAL(prov, prov_attr, user_attr, max_msg_size);
 		return -FI_ENODATA;
 	}
 
-	if (user_attr->tx_ctx_cnt > prov_info->domain_attr->max_ep_tx_ctx) {
+	if (user_attr->tx_ctx_cnt > util_prov->info->domain_attr->max_ep_tx_ctx) {
 		if (user_attr->tx_ctx_cnt == FI_SHARED_CONTEXT) {
-			if (!prov_info->domain_attr->max_ep_stx_ctx) {
+			if (!(util_prov->flags & UTIL_TX_SHARED_CTX)) {
 				FI_INFO(prov, FI_LOG_CORE,
-					"Shared tx context not supported\n");
+						"Shared tx context not supported\n");
 				return -FI_ENODATA;
 			}
 		} else {
 			FI_INFO(prov, FI_LOG_CORE,
-				"Requested tx_ctx_cnt exceeds supported."
-				" Expected:%zd, Requested%zd\n",
-				prov_info->domain_attr->max_ep_tx_ctx,
-				user_attr->tx_ctx_cnt);
+					"Requested tx_ctx_cnt exceeds supported\n");
 			return -FI_ENODATA;
 		}
 	}
 
-	if (user_attr->rx_ctx_cnt > prov_info->domain_attr->max_ep_rx_ctx) {
+	if (user_attr->rx_ctx_cnt > util_prov->info->domain_attr->max_ep_rx_ctx) {
 		if (user_attr->rx_ctx_cnt == FI_SHARED_CONTEXT) {
-			if (!prov_info->domain_attr->max_ep_srx_ctx) {
+			if (!(util_prov->flags & UTIL_RX_SHARED_CTX)) {
 				FI_INFO(prov, FI_LOG_CORE,
-					"Shared rx context not supported\n");
+						"Shared rx context not supported\n");
 				return -FI_ENODATA;
 			}
 		} else {
 			FI_INFO(prov, FI_LOG_CORE,
-				"Requested rx_ctx_cnt exceeds supported."
-				" Expected: %zd, Requested:%zd\n",
-				prov_info->domain_attr->max_ep_rx_ctx,
-				user_attr->rx_ctx_cnt);
+					"Requested rx_ctx_cnt exceeds supported\n");
 			return -FI_ENODATA;
 		}
-	}
-
-	if (user_info->caps & (FI_RMA | FI_ATOMIC)) {
-		if (user_attr->max_order_raw_size >
-		    prov_attr->max_order_raw_size) {
-			FI_INFO(prov, FI_LOG_CORE,
-				"Max order RAW size exceeds supported size\n");
-			FI_INFO_CHECK_VAL(prov, prov_attr, user_attr,
-					  max_order_raw_size);
-			return -FI_ENODATA;
-		}
-
-		if (user_attr->max_order_war_size >
-		    prov_attr->max_order_war_size) {
-			FI_INFO(prov, FI_LOG_CORE,
-				"Max order WAR size exceeds supported size\n");
-			FI_INFO_CHECK_VAL(prov, prov_attr, user_attr,
-					  max_order_war_size);
-			return -FI_ENODATA;
-		}
-
-		if (user_attr->max_order_waw_size >
-		    prov_attr->max_order_waw_size) {
-			FI_INFO(prov, FI_LOG_CORE,
-				"Max order WAW size exceeds supported size\n");
-			FI_INFO_CHECK_VAL(prov, prov_attr, user_attr,
-					  max_order_waw_size);
-			return -FI_ENODATA;
-		}
-	}
-
-	if (user_attr->auth_key_size &&
-	    (user_attr->auth_key_size != prov_attr->auth_key_size)) {
-		FI_INFO(prov, FI_LOG_CORE, "Unsupported authentication size.");
-		FI_INFO_CHECK_VAL(prov, prov_attr, user_attr, auth_key_size);
-		return -FI_ENODATA;
 	}
 
 	return 0;
 }
 
-int ofi_check_rx_attr(const struct fi_provider *prov,
-		      const struct fi_info *prov_info,
-		      const struct fi_rx_attr *user_attr, uint64_t info_mode)
+int fi_check_rx_attr(const struct fi_provider *prov,
+		     const struct fi_rx_attr *prov_attr,
+		     const struct fi_rx_attr *user_attr)
 {
-	const struct fi_rx_attr *prov_attr = prov_info->rx_attr;
-	int rm_enabled = (prov_info->domain_attr->resource_mgmt == FI_RM_ENABLED);
-
 	if (user_attr->caps & ~(prov_attr->caps)) {
 		FI_INFO(prov, FI_LOG_CORE, "caps not supported\n");
-		FI_INFO_CHECK(prov, prov_attr, user_attr, caps, FI_TYPE_CAPS);
+		FI_INFO_CAPS(prov, prov_attr, user_attr, caps, FI_TYPE_CAPS);
 		return -FI_ENODATA;
 	}
 
-	info_mode = user_attr->mode ? user_attr->mode : info_mode;
-	if ((info_mode & prov_attr->mode) != prov_attr->mode) {
+	if ((user_attr->mode & prov_attr->mode) != prov_attr->mode) {
 		FI_INFO(prov, FI_LOG_CORE, "needed mode not set\n");
-		FI_INFO_MODE(prov, prov_attr->mode, user_attr->mode);
+		FI_INFO_MODE(prov, prov_attr, user_attr);
 		return -FI_ENODATA;
 	}
 
 	if (prov_attr->op_flags & ~(prov_attr->op_flags)) {
 		FI_INFO(prov, FI_LOG_CORE, "op_flags not supported\n");
-		FI_INFO_CHECK(prov, prov_attr, user_attr, op_flags,
-			     FI_TYPE_OP_FLAGS);
+		FI_INFO_CAPS(prov, prov_attr, user_attr, op_flags, FI_TYPE_OP_FLAGS);
 		return -FI_ENODATA;
 	}
 
 	if (user_attr->msg_order & ~(prov_attr->msg_order)) {
 		FI_INFO(prov, FI_LOG_CORE, "msg_order not supported\n");
-		FI_INFO_CHECK(prov, prov_attr, user_attr, msg_order,
-			     FI_TYPE_MSG_ORDER);
+		FI_INFO_CAPS(prov, prov_attr, user_attr, msg_order, FI_TYPE_MSG_ORDER);
 		return -FI_ENODATA;
 	}
 
 	if (user_attr->comp_order & ~(prov_attr->comp_order)) {
 		FI_INFO(prov, FI_LOG_CORE, "comp_order not supported\n");
-		FI_INFO_CHECK(prov, prov_attr, user_attr, comp_order,
-			     FI_TYPE_MSG_ORDER);
+		FI_INFO_CAPS(prov, prov_attr, user_attr, comp_order, FI_TYPE_MSG_ORDER);
 		return -FI_ENODATA;
 	}
 
 	if (user_attr->total_buffered_recv > prov_attr->total_buffered_recv) {
 		FI_INFO(prov, FI_LOG_CORE, "total_buffered_recv too large\n");
-		FI_INFO_CHECK_VAL(prov, prov_attr, user_attr,
-				  total_buffered_recv);
 		return -FI_ENODATA;
 	}
 
 	if (user_attr->size > prov_attr->size) {
 		FI_INFO(prov, FI_LOG_CORE, "size is greater than supported\n");
-		FI_INFO_CHECK_VAL(prov, prov_attr, user_attr, size);
 		return -FI_ENODATA;
 	}
 
 	if (user_attr->iov_limit > prov_attr->iov_limit) {
 		FI_INFO(prov, FI_LOG_CORE, "iov_limit too large\n");
-		FI_INFO_CHECK_VAL(prov, prov_attr, user_attr, iov_limit);
-		return -FI_ENODATA;
-	}
-
-	if (!rm_enabled &&
-	    user_attr->total_buffered_recv > prov_attr->total_buffered_recv) {
-		/* Just log a notification, but ignore the value */
-		FI_INFO(prov, FI_LOG_CORE,
-			"Total buffered recv size exceeds supported size\n");
-		FI_INFO_CHECK_VAL(prov, prov_attr, user_attr,
-				  total_buffered_recv);
-	}
-
-	return 0;
-}
-
-static uint64_t ofi_expand_caps(uint64_t base_caps)
-{
-	uint64_t expanded_caps = base_caps;
-	uint64_t msg_caps = FI_SEND | FI_RECV;
-	uint64_t rma_caps = FI_WRITE | FI_READ | FI_REMOTE_WRITE | FI_REMOTE_READ;
-
-	if (base_caps & (FI_MSG | FI_TAGGED))
-		if (!(base_caps & msg_caps))
-			expanded_caps |= msg_caps;
-
-	if (base_caps & (FI_RMA | FI_ATOMIC))
-		if (!(base_caps & rma_caps))
-			expanded_caps |= rma_caps;
-
-	return expanded_caps;
-}
-
-int ofi_check_attr_subset(const struct fi_provider *prov,
-		uint64_t base_caps, uint64_t requested_caps)
-{
-	uint64_t expanded_base_caps;
-
-	expanded_base_caps = ofi_expand_caps(base_caps);
-
-	if (~expanded_base_caps & requested_caps) {
-		FI_INFO(prov, FI_LOG_CORE, "requested caps not subset of base endpoint caps\n");
-		FI_INFO_FIELD(prov, expanded_base_caps, requested_caps, "Supported",
-				"Requested", FI_TYPE_CAPS);
 		return -FI_ENODATA;
 	}
 
 	return 0;
 }
 
-int ofi_check_tx_attr(const struct fi_provider *prov,
-		      const struct fi_tx_attr *prov_attr,
-		      const struct fi_tx_attr *user_attr, uint64_t info_mode)
+int fi_check_tx_attr(const struct fi_provider *prov,
+		     const struct fi_tx_attr *prov_attr,
+		     const struct fi_tx_attr *user_attr)
 {
 	if (user_attr->caps & ~(prov_attr->caps)) {
 		FI_INFO(prov, FI_LOG_CORE, "caps not supported\n");
-		FI_INFO_CHECK(prov, prov_attr, user_attr, caps, FI_TYPE_CAPS);
+		FI_INFO_CAPS(prov, prov_attr, user_attr, caps, FI_TYPE_CAPS);
 		return -FI_ENODATA;
 	}
 
-	info_mode = user_attr->mode ? user_attr->mode : info_mode;
-	if ((info_mode & prov_attr->mode) != prov_attr->mode) {
+	if ((user_attr->mode & prov_attr->mode) != prov_attr->mode) {
 		FI_INFO(prov, FI_LOG_CORE, "needed mode not set\n");
-		FI_INFO_MODE(prov, prov_attr->mode, user_attr->mode);
+		FI_INFO_MODE(prov, prov_attr, user_attr);
 		return -FI_ENODATA;
 	}
 
 	if (prov_attr->op_flags & ~(prov_attr->op_flags)) {
 		FI_INFO(prov, FI_LOG_CORE, "op_flags not supported\n");
-		FI_INFO_CHECK(prov, prov_attr, user_attr, op_flags,
-			     FI_TYPE_OP_FLAGS);
+		FI_INFO_CAPS(prov, prov_attr, user_attr, op_flags, FI_TYPE_OP_FLAGS);
 		return -FI_ENODATA;
 	}
 
 	if (user_attr->msg_order & ~(prov_attr->msg_order)) {
 		FI_INFO(prov, FI_LOG_CORE, "msg_order not supported\n");
-		FI_INFO_CHECK(prov, prov_attr, user_attr, msg_order,
-			     FI_TYPE_MSG_ORDER);
+		FI_INFO_CAPS(prov, prov_attr, user_attr, msg_order, FI_TYPE_MSG_ORDER);
 		return -FI_ENODATA;
 	}
 
 	if (user_attr->comp_order & ~(prov_attr->comp_order)) {
 		FI_INFO(prov, FI_LOG_CORE, "comp_order not supported\n");
-		FI_INFO_CHECK(prov, prov_attr, user_attr, comp_order,
-			     FI_TYPE_MSG_ORDER);
+		FI_INFO_CAPS(prov, prov_attr, user_attr, comp_order, FI_TYPE_MSG_ORDER);
 		return -FI_ENODATA;
 	}
 
 	if (user_attr->inject_size > prov_attr->inject_size) {
 		FI_INFO(prov, FI_LOG_CORE, "inject_size too large\n");
-		FI_INFO_CHECK_VAL(prov, prov_attr, user_attr, inject_size);
 		return -FI_ENODATA;
 	}
 
 	if (user_attr->size > prov_attr->size) {
 		FI_INFO(prov, FI_LOG_CORE, "size is greater than supported\n");
-		FI_INFO_CHECK_VAL(prov, prov_attr, user_attr, size);
 		return -FI_ENODATA;
 	}
 
 	if (user_attr->iov_limit > prov_attr->iov_limit) {
 		FI_INFO(prov, FI_LOG_CORE, "iov_limit too large\n");
-		FI_INFO_CHECK_VAL(prov, prov_attr, user_attr, iov_limit);
 		return -FI_ENODATA;
 	}
 
 	if (user_attr->rma_iov_limit > prov_attr->rma_iov_limit) {
 		FI_INFO(prov, FI_LOG_CORE, "rma_iov_limit too large\n");
-		FI_INFO_CHECK_VAL(prov, prov_attr, user_attr, rma_iov_limit);
 		return -FI_ENODATA;
 	}
 
 	return 0;
 }
 
-/* if there are multiple fi_info in the provider:
- * check provider's info */
-int ofi_prov_check_info(const struct util_prov *util_prov,
-			uint32_t api_version,
-			const struct fi_info *user_info)
-{
-	const struct fi_info *prov_info = util_prov->info;
-	size_t success_info = 0;
-	int ret;
-
-	if (!user_info)
-		return FI_SUCCESS;
-
-	for ( ; prov_info; prov_info = prov_info->next) {
-		ret = ofi_check_info(util_prov, prov_info,
-				     api_version, user_info);
-		if (!ret)
-			success_info++;
-	}
-
-	return (!success_info ? -FI_ENODATA : FI_SUCCESS);
-}
-
-/* if there are multiple fi_info in the provider:
- * check and duplicate provider's info */
-int ofi_prov_check_dup_info(const struct util_prov *util_prov,
-			    uint32_t api_version,
-			    const struct fi_info *user_info,
-			    struct fi_info **info)
+int fi_check_info(const struct util_prov *util_prov,
+		  const struct fi_info *user_info,
+		  enum fi_match_type type)
 {
 	const struct fi_info *prov_info = util_prov->info;
 	const struct fi_provider *prov = util_prov->prov;
-	struct fi_info *fi, *tail;
-	int ret;
-
-	if (!info)
-		return -FI_EINVAL;
-
-	*info = tail = NULL;
-
-	for ( ; prov_info; prov_info = prov_info->next) {
-		ret = ofi_check_info(util_prov, prov_info,
-				     api_version, user_info);
-	    	if (ret)
-			continue;
-		if (!(fi = fi_dupinfo(prov_info))) {
-			ret = -FI_ENOMEM;
-			goto err;
-		}
-		if (!*info)
-			*info = fi;
-		else
-			tail->next = fi;
-		tail = fi;
-	}
-
-	return (!*info ? -FI_ENODATA : FI_SUCCESS);
-err:
-	fi_freeinfo(*info);
-	FI_INFO(prov, FI_LOG_CORE,
-		"cannot copy info\n");
-	return ret;
-}
-
-/* if there is only single fi_info in the provider */
-int ofi_check_info(const struct util_prov *util_prov,
-		   const struct fi_info *prov_info, uint32_t api_version,
-		   const struct fi_info *user_info)
-{
-	const struct fi_provider *prov = util_prov->prov;
-	uint64_t prov_mode;
 	int ret;
 
 	if (!user_info)
@@ -977,15 +557,13 @@ int ofi_check_info(const struct util_prov *util_prov,
 
 	if (user_info->caps & ~(prov_info->caps)) {
 		FI_INFO(prov, FI_LOG_CORE, "Unsupported capabilities\n");
-		FI_INFO_CHECK(prov, prov_info, user_info, caps, FI_TYPE_CAPS);
+		FI_INFO_CAPS(prov, prov_info, user_info, caps, FI_TYPE_CAPS);
 		return -FI_ENODATA;
 	}
 
-	prov_mode = ofi_mr_get_prov_mode(api_version, user_info, prov_info);
-
-	if ((user_info->mode & prov_mode) != prov_mode) {
+	if ((user_info->mode & prov_info->mode) != prov_info->mode) {
 		FI_INFO(prov, FI_LOG_CORE, "needed mode not set\n");
-		FI_INFO_MODE(prov, prov_mode, user_info->mode);
+		FI_INFO_MODE(prov, prov_info, user_info);
 		return -FI_ENODATA;
 	}
 
@@ -996,112 +574,50 @@ int ofi_check_info(const struct util_prov *util_prov,
 	}
 
 	if (user_info->fabric_attr) {
-		ret = ofi_check_fabric_attr(prov, prov_info->fabric_attr,
-					    user_info->fabric_attr);
+		ret = fi_check_fabric_attr(prov, prov_info->fabric_attr,
+					   user_info->fabric_attr,
+					   type);
 		if (ret)
 			return ret;
 	}
 
 	if (user_info->domain_attr) {
-		ret = ofi_check_domain_attr(prov, api_version,
-					    prov_info->domain_attr,
-					    user_info);
+		ret = fi_check_domain_attr(prov, prov_info->domain_attr,
+				user_info->domain_attr,
+				type);
 		if (ret)
 			return ret;
 	}
 
 	if (user_info->ep_attr) {
-		ret = ofi_check_ep_attr(util_prov, api_version,
-					prov_info, user_info);
+		ret = fi_check_ep_attr(util_prov, user_info->ep_attr);
 		if (ret)
 			return ret;
 	}
 
 	if (user_info->rx_attr) {
-		ret = ofi_check_rx_attr(prov, prov_info,
-					user_info->rx_attr, user_info->mode);
+		ret = fi_check_rx_attr(prov, prov_info->rx_attr,
+				user_info->rx_attr);
 		if (ret)
 			return ret;
 	}
 
 	if (user_info->tx_attr) {
-		ret = ofi_check_tx_attr(prov, prov_info->tx_attr,
-					user_info->tx_attr, user_info->mode);
+		ret = fi_check_tx_attr(prov, prov_info->tx_attr,
+				user_info->tx_attr);
 		if (ret)
 			return ret;
 	}
+
 	return 0;
 }
 
-static uint64_t ofi_get_caps(uint64_t info_caps, uint64_t hint_caps,
-			    uint64_t attr_caps)
-{
-	uint64_t caps;
-
-	if (!hint_caps) {
-		caps = (info_caps & attr_caps & FI_PRIMARY_CAPS) |
-		       (attr_caps & FI_SECONDARY_CAPS);
-	} else {
-		caps = (hint_caps & FI_PRIMARY_CAPS) |
-		       (attr_caps & FI_SECONDARY_CAPS);
-	}
-
-	if (caps & (FI_MSG | FI_TAGGED) && !(caps & OFI_MSG_CAPS))
-		caps |= OFI_MSG_CAPS;
-	if (caps & (FI_RMA | FI_ATOMICS) && !(caps & OFI_RMA_CAPS))
-		caps |= OFI_RMA_CAPS;
-
-	return caps;
-}
-
-static void fi_alter_domain_attr(struct fi_domain_attr *attr,
-				 const struct fi_domain_attr *hints,
-				 uint64_t info_caps, uint32_t api_version)
-{
-	int hints_mr_mode;
-
-	hints_mr_mode = hints ? hints->mr_mode : 0;
-	if (hints_mr_mode & (FI_MR_BASIC | FI_MR_SCALABLE)) {
-		attr->mr_mode = hints_mr_mode;
-	} else if (FI_VERSION_LT(api_version, FI_VERSION(1, 5))) {
-		attr->mr_mode = (attr->mr_mode && attr->mr_mode != FI_MR_SCALABLE) ?
-				FI_MR_BASIC : FI_MR_SCALABLE;
-	} else {
-		if ((hints_mr_mode & attr->mr_mode) != attr->mr_mode) {
-			attr->mr_mode = ofi_cap_mr_mode(info_caps,
-						attr->mr_mode & hints_mr_mode);
-		}
-	}
-
-	attr->caps = ofi_get_caps(info_caps, hints ? hints->caps : 0, attr->caps);
-	if (!hints)
-		return;
-
-	if (hints->threading)
-		attr->threading = hints->threading;
-	if (hints->control_progress)
-		attr->control_progress = hints->control_progress;
-	if (hints->data_progress)
-		attr->data_progress = hints->data_progress;
-	if (hints->av_type)
-		attr->av_type = hints->av_type;
-}
-
 static void fi_alter_ep_attr(struct fi_ep_attr *attr,
-			     const struct fi_ep_attr *hints,
-			     uint64_t info_caps)
+			     const struct fi_ep_attr *hints)
 {
 	if (!hints)
 		return;
 
-	if (info_caps & (FI_RMA | FI_ATOMIC)) {
-		if (hints->max_order_raw_size)
-			attr->max_order_raw_size = hints->max_order_raw_size;
-		if (hints->max_order_war_size)
-			attr->max_order_war_size = hints->max_order_war_size;
-		if (hints->max_order_waw_size)
-			attr->max_order_waw_size = hints->max_order_waw_size;
-	}
 	if (hints->tx_ctx_cnt)
 		attr->tx_ctx_cnt = hints->tx_ctx_cnt;
 	if (hints->rx_ctx_cnt)
@@ -1112,11 +628,15 @@ static void fi_alter_rx_attr(struct fi_rx_attr *attr,
 			     const struct fi_rx_attr *hints,
 			     uint64_t info_caps)
 {
-	attr->caps = ofi_get_caps(info_caps, hints ? hints->caps : 0, attr->caps);
-	if (!hints)
+	if (!hints) {
+		attr->caps = (info_caps & attr->caps & FI_PRIMARY_CAPS) |
+			     (attr->caps & FI_SECONDARY_CAPS);
 		return;
+	}
 
 	attr->op_flags = hints->op_flags;
+	attr->caps = (hints->caps & FI_PRIMARY_CAPS) |
+		     (attr->caps & FI_SECONDARY_CAPS);
 	attr->total_buffered_recv = hints->total_buffered_recv;
 	if (hints->size)
 		attr->size = hints->size;
@@ -1128,11 +648,15 @@ static void fi_alter_tx_attr(struct fi_tx_attr *attr,
 			     const struct fi_tx_attr *hints,
 			     uint64_t info_caps)
 {
-	attr->caps = ofi_get_caps(info_caps, hints ? hints->caps : 0, attr->caps);
-	if (!hints)
+	if (!hints) {
+		attr->caps = (info_caps & attr->caps & FI_PRIMARY_CAPS) |
+			     (attr->caps & FI_SECONDARY_CAPS);
 		return;
+	}
 
 	attr->op_flags = hints->op_flags;
+	attr->caps = (hints->caps & FI_PRIMARY_CAPS) |
+		     (attr->caps & FI_SECONDARY_CAPS);
 	if (hints->inject_size)
 		attr->inject_size = hints->inject_size;
 	if (hints->size)
@@ -1143,66 +667,22 @@ static void fi_alter_tx_attr(struct fi_tx_attr *attr,
 		attr->rma_iov_limit = hints->rma_iov_limit;
 }
 
-static uint64_t ofi_get_info_caps(const struct fi_info *prov_info,
-				  const struct fi_info *user_info,
-				  uint32_t api_version)
-{
-	int prov_mode, user_mode;
-	uint64_t caps;
-
-	assert(user_info);
-
-	caps = ofi_get_caps(prov_info->caps, user_info->caps, prov_info->caps);
-
-	prov_mode = prov_info->domain_attr->mr_mode;
-
-	if (!ofi_rma_target_allowed(caps) ||
-	    !(prov_mode & OFI_MR_MODE_RMA_TARGET))
-		return caps;
-
-	if (!user_info->domain_attr)
-		goto trim_caps;
-
-	user_mode = user_info->domain_attr->mr_mode;
-
-	if ((FI_VERSION_LT(api_version, FI_VERSION(1,5)) &&
-	    (user_mode == FI_MR_UNSPEC)) ||
-	    (user_mode == FI_MR_BASIC) ||
-	    ((user_mode & prov_mode & OFI_MR_MODE_RMA_TARGET) == 
-	     (prov_mode & OFI_MR_MODE_RMA_TARGET)))
-		return caps;
-
-trim_caps:
-	return caps & ~(FI_REMOTE_WRITE | FI_REMOTE_READ);
-}
-
 /*
  * Alter the returned fi_info based on the user hints.  We assume that
  * the hints have been validated and the starting fi_info is properly
  * configured by the provider.
  */
-void ofi_alter_info(struct fi_info *info, const struct fi_info *hints,
-		    uint32_t api_version)
+void ofi_alter_info(struct fi_info *info,
+		   const struct fi_info *hints)
 {
 	if (!hints)
 		return;
 
 	for (; info; info = info->next) {
-		/* This should stay before call to fi_alter_domain_attr as
-		 * the checks depend on unmodified provider mr_mode attr */
-		info->caps = ofi_get_info_caps(info, hints, api_version);
+		info->caps = (hints->caps & FI_PRIMARY_CAPS) |
+			     (info->caps & FI_SECONDARY_CAPS);
 
-		if ((info->domain_attr->mr_mode & FI_MR_LOCAL) &&
-		    (FI_VERSION_LT(api_version, FI_VERSION(1, 5)) ||
-		     (hints && hints->domain_attr &&
-		      (hints->domain_attr->mr_mode & (FI_MR_BASIC | FI_MR_SCALABLE)))))
-			info->mode |= FI_LOCAL_MR;
-
-		info->handle = hints->handle;
-
-		fi_alter_domain_attr(info->domain_attr, hints->domain_attr,
-				     info->caps, api_version);
-		fi_alter_ep_attr(info->ep_attr, hints->ep_attr, info->caps);
+		fi_alter_ep_attr(info->ep_attr, hints->ep_attr);
 		fi_alter_rx_attr(info->rx_attr, hints->rx_attr, info->caps);
 		fi_alter_tx_attr(info->tx_attr, hints->tx_attr, info->caps);
 	}

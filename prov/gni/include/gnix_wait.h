@@ -36,7 +36,7 @@
 
 #include <pthread.h>
 #include <rdma/fi_eq.h>
-#include <ofi_list.h>
+#include <fi_list.h>
 
 #define WAIT_SUB (FI_LOG_CQ | FI_LOG_EQ)
 
@@ -67,8 +67,6 @@ struct gnix_fid_wait {
 
 	struct slist set;
 };
-
-extern uint32_t gnix_wait_thread_sleep_time;
 
 /*
  * API Functions

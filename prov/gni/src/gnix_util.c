@@ -1,8 +1,7 @@
 /*
  * Copyright (c) 2014 Intel Corporation, Inc.  All rights reserved.
- * Copyright (c) 2015-2017 Los Alamos National Security, LLC.
- *                         All rights reserved.
- * Copyright (c) 2015-2017 Cray Inc. All rights reserved.
+ * Copyright (c) 2015 Los Alamos National Security, LLC. All rights reserved.
+ * Copyright (c) 2015-2016 Cray Inc. All rights reserved.
  *
  * This software is available to you under a choice of one of two
  * licenses.  You may choose to be licensed under the terms of the GNU
@@ -69,12 +68,6 @@ static bool app_init;
 static uint8_t gnix_app_ptag;
 static uint32_t gnix_app_cookie;
 static uint32_t gnix_pes_on_node;
-static int gnix_pe_node_rank = -1;
-#if HAVE_CRITERION
-int gnix_first_pe_on_node; /* globally visible for  criterion */
-#else
-static int gnix_first_pe_on_node;
-#endif
 /* CCM/ccmlogin specific stuff */
 static bool ccm_init;
 /* This file provides ccm_alps_info */
@@ -90,7 +83,6 @@ typedef struct ccm_alps_info {
 static uint64_t gnix_apid;
 static alpsAppLayout_t gnix_appLayout;
 static uint32_t gnix_device_id;
-static int gnix_cq_limit;
 /* These are not used currently and could be static to gnix_alps_init */
 static int alps_init;
 static int *gnix_app_placementList;
@@ -103,12 +95,6 @@ static int *gnix_app_totalPes;
 static int *gnix_app_nodePes;
 static int *gnix_app_peCpus;
 
-fastlock_t __gnix_alps_lock;
-
-int _gnix_get_cq_limit(void)
-{
-	return gnix_cq_limit;
-}
 
 static inline void __gnix_ccm_cleanup(void)
 {
@@ -161,9 +147,8 @@ static int __gnix_ccm_init(void)
 {
 	int rc, fd;
 	FILE *f;
-	char *nodefile;
-	char nodelist[PATH_MAX];
-	const char *home;
+	char ccm_nodelist[PATH_MAX];
+	const char *home, *jobid;
 	ccm_alps_info_t info;
 	uint32_t num_nids = 0;
 
@@ -187,18 +172,18 @@ static int __gnix_ccm_init(void)
 		   gnix_app_ptag, gnix_app_cookie);
 
 	home = getenv("HOME");
-	/* use the WLM node file if using PBS */
-	nodefile = getenv("PBS_NODEFILE");
-	if (!nodefile) {
-		const char *jobid = getenv("SLURM_JOB_ID");
+	jobid = getenv("PBS_JOBID");
+	if (!jobid) {
+		/* This path hasn't been tested yet (no access to resources) */
+		jobid = getenv("SLURM_JOB_ID");
 		if (!jobid) {
 			jobid = getenv("SLURM_JOBID");
 		}
-		snprintf(nodelist, PATH_MAX, "%s/%s%s", home ? home : ".",
-			 CCM_NODELIST_FN, jobid ? jobid : "sdb");
-		nodefile = nodelist;
+		/* Should we do something else if this fails? */
 	}
-	f = fopen(nodefile, "r");
+	snprintf(ccm_nodelist, PATH_MAX, "%s/%s%s", home ? home : ".",
+		 CCM_NODELIST_FN, jobid ? jobid : "sdb");
+	f = fopen(ccm_nodelist, "r");
 	if (f) {
 		char mynid[PATH_MAX];
 		char next_nid[PATH_MAX];
@@ -225,7 +210,7 @@ static int __gnix_ccm_init(void)
 	} else {
 		/* what would be a better default? */
 		GNIX_WARN(FI_LOG_FABRIC,
-			  "CCM nodelist not found.  Assuming 1 PE per node\n");
+			  "CCM nodelist not found.  Assuming 1 PE per node");
 		gnix_pes_on_node = 1;
 	}
 	GNIX_DEBUG(FI_LOG_FABRIC, "pes per node=%u\n", gnix_pes_on_node);
@@ -247,22 +232,18 @@ static int __gnix_ccm_init(void)
 
 static int __gnix_alps_init(void)
 {
-	char *cptr = NULL;
 	int ret = FI_SUCCESS;
-	int my_pe = -1;
 	int alps_status = 0;
 	size_t alps_count;
 	alpsAppLLIGni_t *rdmacred_rsp = NULL;
 	alpsAppGni_t *rdmacred_buf = NULL;
 
-	fastlock_acquire(&__gnix_alps_lock);
 	/* lli_lock doesn't return anything useful */
 	ret = alps_app_lli_lock();
 
 	if (alps_init) {
 		/* alps lli lock protects alps_init for now */
 		alps_app_lli_unlock();
-		fastlock_release(&__gnix_alps_lock);
 		return ret;
 	}
 
@@ -366,30 +347,12 @@ static int __gnix_alps_init(void)
 	}
 
 	gnix_pes_on_node = gnix_appLayout.numPesHere;
-	gnix_first_pe_on_node = gnix_appLayout.firstPe;
-
-	if ((cptr = getenv("PMI_FORK_RANK")) != NULL) {
-		my_pe = atoi(cptr);
-	} else {
-		if ((cptr = getenv("ALPS_APP_PE")) != NULL) {
-			my_pe = atoi(cptr);
-		}
-	}
-
-	/*
- 	 * compute local pe rank, assuming we got our global PE rank
- 	 * via either an ALPS (or ALPS SLURM plugin) or Cray PMI,
- 	 * otherwise set to -1.
- 	 */
-	if (my_pe != -1)
-		gnix_pe_node_rank = my_pe - gnix_first_pe_on_node;
 
 	alps_init = true;
 
 	ret = 0;
 err:
 	alps_app_lli_unlock();
-	fastlock_release(&__gnix_alps_lock);
 	if (rdmacred_rsp != NULL) {
 		free(rdmacred_rsp);
 	}
@@ -423,8 +386,6 @@ static int __gnix_app_init(void)
 int gnixu_get_rdma_credentials(void *addr, uint8_t *ptag, uint32_t *cookie)
 {
 	int ret = FI_SUCCESS;
-
-	/*TODO: If addr is used, ensure that ep->info->addr_format is checked*/
 
 	if ((ptag == NULL) || (cookie == NULL)) {
 		return -FI_EINVAL;
@@ -629,33 +590,6 @@ int _gnix_pes_on_node(uint32_t *num_pes)
 	return FI_SUCCESS;
 }
 
-int _gnix_pe_node_rank(int *pe_node_rank)
-{
-	int rc;
-
-	if (!pe_node_rank) {
-		return -FI_EINVAL;
-	}
-
-	rc = __gnix_app_init();
-	if (rc) {
-		GNIX_WARN(FI_LOG_FABRIC,
-			  "__gnix_app_init() failed, ret=%d(%s)\n",
-			  rc, strerror(errno));
-		return rc;
-	}
-
-	if (gnix_pe_node_rank != -1) {
-		*pe_node_rank = gnix_pe_node_rank;
-		rc = FI_SUCCESS;
-	} else
-		rc = -FI_EADDRNOTAVAIL;
-
-	GNIX_INFO(FI_LOG_FABRIC, "pe_node_rank: %u\n", gnix_pe_node_rank);
-
-	return rc;
-}
-
 int _gnix_nics_per_rank(uint32_t *nics_per_rank)
 {
 	int rc;
@@ -682,8 +616,6 @@ int _gnix_nics_per_rank(uint32_t *nics_per_rank)
 	if (rc) {
 		return rc;
 	}
-
-	gnix_cq_limit = cqs;
 	cqs /= GNIX_CQS_PER_EP;
 
 	rc = _gnix_pes_on_node(&npes);
@@ -723,10 +655,9 @@ void _gnix_dump_gni_res(uint8_t ptag)
 					    dev_res_desc.reserved,
 					    dev_res_desc.held,
 					    dev_res_desc.total);
+			GNIX_WARN(FI_LOG_FABRIC, "%s", buf);
 		}
 	}
-
-	GNIX_WARN(FI_LOG_FABRIC, "%s", buf);
 
 	written = 0;
 	written += snprintf(buf + written, size - written,
@@ -739,10 +670,9 @@ void _gnix_dump_gni_res(uint8_t ptag)
 					    ptag, gni_job_res_to_str(i),
 					    job_res_desc.used,
 					    job_res_desc.limit);
+			GNIX_WARN(FI_LOG_FABRIC, "%s", buf);
 		}
 	}
-
-	GNIX_WARN(FI_LOG_FABRIC, "%s", buf);
 }
 
 int _gnix_get_num_corespec_cpus(uint32_t *num_core_spec_cpus)

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014-2017, Cisco Systems, Inc. All rights reserved.
+ * Copyright (c) 2014-2016, Cisco Systems, Inc. All rights reserved.
  *
  * This software is available to you under a choice of one of two
  * licenses.  You may choose to be licensed under the terms of the GNU
@@ -53,8 +53,8 @@
 #include <rdma/fi_endpoint.h>
 #include <rdma/fi_rma.h>
 #include <rdma/fi_errno.h>
-#include "ofi.h"
-#include "ofi_file.h"
+#include "fi.h"
+#include "fi_file.h"
 
 #include "usnic_direct.h"
 #include "usdf.h"
@@ -454,7 +454,6 @@ usdf_cm_msg_connect(struct fid_ep *fep, const void *addr,
 	struct usdf_fabric *fp;
 	struct usdf_connreq_msg *reqp;
 	struct usd_qp_impl *qp;
-	struct fi_info *info;
 	size_t request_size;
 	int ret;
 
@@ -466,9 +465,7 @@ usdf_cm_msg_connect(struct fid_ep *fep, const void *addr,
 	ep = ep_ftou(fep);
 	udp = ep->ep_domain;
 	fp = udp->dom_fabric;
-	info = ep->ep_domain->dom_info;
-
-	sin = usdf_format_to_sin(info, addr);
+	sin = addr;
 
 	/* Although paramlen may be less than USDF_MAX_CONN_DATA, the same crp
 	 * struct is used for receiving the accept and reject payload. The
@@ -552,13 +549,9 @@ usdf_cm_msg_connect(struct fid_ep *fep, const void *addr,
 		goto fail;
 	}
 
-	usdf_free_sin_if_needed(info, (struct sockaddr_in *)sin);
-
 	return 0;
 
 fail:
-	usdf_free_sin_if_needed(info, (struct sockaddr_in *)sin);
-
 	if (crp != NULL) {
 		if (crp->cr_sockfd != -1) {
 			close(crp->cr_sockfd);
@@ -570,107 +563,26 @@ fail:
 	return ret;
 }
 
-/* A wrapper to core function to translate string address to
- * sockaddr_in type. We are expecting a NULL sockaddr_in**.
- * The core function will allocated it for us. The caller HAS TO FREE it.
- */
-int usdf_str_toaddr(const char *str, struct sockaddr_in **outaddr)
-{
-	uint32_t type;
-	size_t size;
-	int ret;
-
-	type = FI_SOCKADDR_IN;
-
-	/* call the core function. The core always allocate the addr for us. */
-	ret = ofi_str_toaddr(str, &type, (void **)outaddr, &size);
-
-#if ENABLE_DEBUG
-	char outstr[USDF_ADDR_STR_LEN];
-	size_t out_size = USDF_ADDR_STR_LEN;
-
-	inet_ntop(AF_INET, &((*outaddr)->sin_addr), outstr, out_size);
-	USDF_DBG_SYS(EP_CTRL,
-		    "%s(string) converted to addr :%s:%u(inet)\n",
-		    str, outstr, ntohs((*outaddr)->sin_port));
-#endif
-
-	return ret;
-}
-
-/* A wrapper to core function to translate sockaddr_in address to
- * string. This function is not allocating any memory. We are expected
- * an allocated buffer.
- */
-const char *usdf_addr_tostr(const struct sockaddr_in *sin,
-			    char *addr_str, size_t *size)
-{
-	const char *ret;
-
-	ret = ofi_straddr(addr_str, size, FI_SOCKADDR_IN, sin);
-
-#if ENABLE_DEBUG
-	char outstr[USDF_ADDR_STR_LEN];
-	size_t out_size = USDF_ADDR_STR_LEN;
-
-	inet_ntop(AF_INET, &sin->sin_addr, outstr, out_size);
-	USDF_DBG_SYS(EP_CTRL,
-		    "%s:%d(inet) converted to %s(string)\n",
-		    outstr, ntohs(sin->sin_port), addr_str);
-#endif
-
-	return ret;
-}
-
 /*
  * Return local address of an EP
  */
-static int usdf_cm_copy_name(struct fi_info *info, struct sockaddr_in *sin,
-		void *addr, size_t *addrlen)
-{
-	int ret;
-	char addr_str[USDF_ADDR_STR_LEN];
-	size_t len;
-
-	USDF_TRACE_SYS(EP_CTRL, "\n");
-
-	ret = FI_SUCCESS;
-	switch (info->addr_format) {
-	case FI_ADDR_STR:
-		len = USDF_ADDR_STR_LEN;
-		usdf_addr_tostr(sin, addr_str, &len);
-		snprintf(addr, MIN(len, *addrlen), "%s", addr_str);
-		break;
-	case FI_SOCKADDR:
-	case FI_SOCKADDR_IN:
-		len = sizeof(*sin);
-		memcpy(addr, sin, MIN(len, *addrlen));
-		break;
-	default:
-		return -FI_EINVAL;
-	}
-
-	/* If the buffer is too small, tell the user. */
-	if (*addrlen < len)
-		ret = -FI_ETOOSMALL;
-
-	/* Always return the actual size. */
-	*addrlen = len;
-	return ret;
-}
-
 int usdf_cm_rdm_getname(fid_t fid, void *addr, size_t *addrlen)
 {
 	struct usdf_ep *ep;
 	struct usdf_rx *rx;
 	struct sockaddr_in sin;
-	struct fi_info *info;
+	size_t copylen;
 
 	USDF_TRACE_SYS(EP_CTRL, "\n");
 
 	ep = ep_fidtou(fid);
 	rx = ep->ep_rx;
-	info = ep->ep_domain->dom_info;
+
+	copylen = sizeof(sin);
+	if (copylen > *addrlen) {
+		copylen = *addrlen;
+	}
+	*addrlen = sizeof(sin);
 
 	memset(&sin, 0, sizeof(sin));
 	sin.sin_family = AF_INET;
@@ -681,8 +593,13 @@ int usdf_cm_rdm_getname(fid_t fid, void *addr, size_t *addrlen)
 	} else {
 		sin.sin_port = to_qpi(rx->rx_qp)->uq_attrs.uqa_local_addr.ul_addr.ul_udp.u_addr.sin_port;
 	}
+	memcpy(addr, &sin, copylen);
 
-	return usdf_cm_copy_name(info, &sin, addr, addrlen);
+	if (copylen < sizeof(sin)) {
+		return -FI_ETOOSMALL;
+	} else {
+		return 0;
+	}
 }
 
 int usdf_cm_dgram_getname(fid_t fid, void *addr, size_t *addrlen)
@@ -690,13 +607,15 @@ int usdf_cm_dgram_getname(fid_t fid, void *addr, size_t *addrlen)
 	int ret;
 	struct usdf_ep *ep;
 	struct sockaddr_in sin;
-	struct fi_info *info;
 	socklen_t slen;
+	size_t copylen;
 
 	USDF_TRACE_SYS(EP_CTRL, "\n");
 
 	ep = ep_fidtou(fid);
-	info = ep->ep_domain->dom_info;
+
+	copylen = MIN(sizeof(sin), *addrlen);
+	*addrlen = sizeof(sin);
 
 	memset(&sin, 0, sizeof(sin));
 	if (ep->e.dg.ep_qp == NULL) {
@@ -715,21 +634,31 @@ int usdf_cm_dgram_getname(fid_t fid, void *addr, size_t *addrlen)
 		assert(sin.sin_addr.s_addr ==
 			ep->ep_domain->dom_fabric->fab_dev_attrs->uda_ipaddr_be);
 	}
+	memcpy(addr, &sin, copylen);
 
-	return usdf_cm_copy_name(info, &sin, addr, addrlen);
+	if (copylen < sizeof(sin))
+		return -FI_ETOOSMALL;
+	else
+		return 0;
 }
 
 int usdf_cm_msg_getname(fid_t fid, void *addr, size_t *addrlen)
 {
 	struct usdf_ep *ep;
-	struct fi_info *info;
+	size_t copylen;
 
 	USDF_TRACE_SYS(EP_CTRL, "\n");
 
 	ep = ep_fidtou(fid);
-	info = ep->ep_domain->dom_info;
 
-	return usdf_cm_copy_name(info, &ep->e.msg.ep_lcl_addr, addr, addrlen);
+	copylen = MIN(sizeof(ep->e.msg.ep_lcl_addr), *addrlen);
+	*addrlen = sizeof(ep->e.msg.ep_lcl_addr);
+	memcpy(addr, &ep->e.msg.ep_lcl_addr, copylen);
+
+	if (copylen < sizeof(ep->e.msg.ep_lcl_addr))
+		return -FI_ETOOSMALL;
+	else
+		return 0;
 }
 
 /* Checks that the given address is actually a sockaddr_in of appropriate

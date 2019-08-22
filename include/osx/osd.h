@@ -45,7 +45,7 @@
 #include <pthread.h>
 
 #include "unix/osd.h"
-#include "rdma/fi_errno.h"
+
 #include "config.h"
 
 #define pthread_yield pthread_yield_np
@@ -60,6 +60,19 @@
 
 #ifdef __cplusplus
 extern "C" {
+#endif
+
+/* macOS Sierra added clock_gettime to libc. This implementation should only
+ * take effect if it is not available.
+ */
+#if !HAVE_CLOCK_GETTIME
+
+#define CLOCK_REALTIME CALENDAR_CLOCK
+#define CLOCK_MONOTONIC SYSTEM_CLOCK
+
+typedef int clockid_t;
+int clock_gettime(clockid_t clk_id, struct timespec *tp);
+
 #endif
 
 static inline int ofi_shm_remap(struct util_shm *shm, size_t newsize, void **mapped)

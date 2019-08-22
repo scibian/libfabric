@@ -46,7 +46,6 @@ static struct fi_ops_domain udpx_domain_ops = {
 	.poll_open = fi_poll_create,
 	.stx_ctx = fi_no_stx_context,
 	.srx_ctx = fi_no_srx_context,
-	.query_atomic = fi_no_query_atomic,
 };
 
 static int udpx_domain_close(fid_t fid)
@@ -72,10 +71,10 @@ static struct fi_ops udpx_domain_fi_ops = {
 int udpx_domain_open(struct fid_fabric *fabric, struct fi_info *info,
 		struct fid_domain **domain, void *context)
 {
-	struct util_domain *util_domain;
 	int ret;
+	struct util_domain *util_domain;
 
-	ret = ofi_prov_check_info(&udpx_util_prov, fabric->api_version, info);
+	ret = udpx_check_info(info);
 	if (ret)
 		return ret;
 
@@ -84,10 +83,8 @@ int udpx_domain_open(struct fid_fabric *fabric, struct fi_info *info,
 		return -FI_ENOMEM;
 
 	ret = ofi_domain_init(fabric, info, util_domain, context);
-	if (ret) {
-		free(util_domain);
+	if (ret)
 		return ret;
-	}
 
 	*domain = &util_domain->domain_fid;
 	(*domain)->fid.ops = &udpx_domain_fi_ops;
