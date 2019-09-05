@@ -1,8 +1,9 @@
-libfabric (1.4.0-1sci9+opa10.8u1) scibian9; urgency=medium
+libfabric (1.4.0-1sci9+opa10.8u2) scibian9+opa10.8; urgency=medium
 
-  * New release 1.4.0-1sci9+opa10.8u1
+  * Correct distribution name
+  * New release 1.4.0-1sci9+opa10.8u2
 
- -- Pierre Trespeuch <pierre-externe.trespeuch@edf.fr>  Thu, 05 Sep 2019 17:23:44 +0200
+ -- Pierre Trespeuch <pierre-externe.trespeuch@edf.fr>  Thu, 05 Sep 2019 18:00:40 +0200
 
 libfabric (1.4.0-1sci9+opa10.7u3) scibian9; urgency=medium
 
