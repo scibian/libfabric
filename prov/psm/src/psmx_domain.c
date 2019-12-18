@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2014 Intel Corporation. All rights reserved.
+ * Copyright (c) 2013-2017 Intel Corporation. All rights reserved.
  *
  * This software is available to you under a choice of one of two
  * licenses.  You may choose to be licensed under the terms of the GNU
@@ -73,7 +73,7 @@ static int psmx_progress_set_affinity(char *affinity)
 
 		if (n < 2)
 			end = start;
-	
+
 		if (stride < 1)
 			stride = 1;
 
@@ -182,7 +182,7 @@ static int psmx_domain_close(fid_t fid)
 			      util_domain.domain_fid.fid);
 
 	FI_INFO(&psmx_prov, FI_LOG_DOMAIN, "refcnt=%d\n",
-		atomic_get(&domain->util_domain.ref));
+		ofi_atomic_get32(&domain->util_domain.ref));
 
 	psmx_domain_release(domain);
 
@@ -245,6 +245,7 @@ static struct fi_ops_domain psmx_domain_ops = {
 	.poll_open = fi_poll_create,
 	.stx_ctx = psmx_stx_ctx,
 	.srx_ctx = fi_no_srx_context,
+	.query_atomic = psmx_query_atomic,
 };
 
 static int psmx_key_compare(void *key1, void *key2)
@@ -307,7 +308,7 @@ static int psmx_domain_init(struct psmx_fid_domain *domain,
 	}
 
 	domain->mr_reserved_key = 1;
-	
+
 	err = fastlock_init(&domain->poll_lock);
 	if (err) {
 		FI_WARN(&psmx_prov, FI_LOG_CORE,
@@ -418,14 +419,30 @@ err_out:
 	return err;
 }
 
-int psmx_domain_check_features(struct psmx_fid_domain *domain, int ep_cap)
+static int psmx_domain_check_ep_caps(uint64_t domain_caps, uint64_t ep_caps)
 {
-	if ((domain->caps & ep_cap & ~PSMX_SUB_CAPS) != (ep_cap & ~PSMX_SUB_CAPS)) {
+	domain_caps &= ~PSMX_SUB_CAPS;
+	ep_caps &= ~PSMX_SUB_CAPS;
+
+	if ((domain_caps & ep_caps) != ep_caps) {
 		FI_INFO(&psmx_prov, FI_LOG_CORE,
-			"caps mismatch: domain->caps=%llx, ep->caps=%llx, mask=%llx\n",
-			domain->caps, ep_cap, ~PSMX_SUB_CAPS);
+			"caps mismatch: domain_caps=%s\n",
+			fi_tostr(&domain_caps, FI_TYPE_CAPS));
+
+		FI_INFO(&psmx_prov, FI_LOG_CORE,
+			"caps mismatch: ep_caps=%s\n",
+			fi_tostr(&ep_caps, FI_TYPE_CAPS));
+
 		return -FI_EOPNOTSUPP;
 	}
+
+	return 0;
+}
+
+int psmx_domain_check_features(struct psmx_fid_domain *domain, uint64_t ep_cap)
+{
+	if (psmx_domain_check_ep_caps(domain->caps, ep_cap))
+		return -FI_EOPNOTSUPP;
 
 	if ((ep_cap & FI_TAGGED) && domain->tagged_ep &&
 	    ofi_recv_allowed(ep_cap))
@@ -453,12 +470,8 @@ int psmx_domain_enable_ep(struct psmx_fid_domain *domain, struct psmx_fid_ep *ep
 	if (ep)
 		ep_cap = ep->caps;
 
-	if ((domain->caps & ep_cap & ~PSMX_SUB_CAPS) != (ep_cap & ~PSMX_SUB_CAPS)) {
-		FI_INFO(&psmx_prov, FI_LOG_CORE,
-			"caps mismatch: domain->caps=%llx, ep->caps=%llx, mask=%llx\n",
-			domain->caps, ep_cap, ~PSMX_SUB_CAPS);
+	if (psmx_domain_check_ep_caps(domain->caps, ep_cap))
 		return -FI_EOPNOTSUPP;
-	}
 
 	if (ep_cap & FI_MSG)
 		domain->reserved_tag_bits |= PSMX_MSG_BIT;

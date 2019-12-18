@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2014 Intel Corporation. All rights reserved.
+ * Copyright (c) 2013-2017 Intel Corporation. All rights reserved.
  *
  * This software is available to you under a choice of one of two
  * licenses.  You may choose to be licensed under the terms of the GNU
@@ -122,11 +122,13 @@ int psmx_am_rma_handler(psm_am_token_t token, psm_epaddr_t epaddr,
 						err = -FI_ENOMEM;
 				}
 
-				if (mr->domain->rma_ep->remote_write_cntr)
-					psmx_cntr_inc(mr->domain->rma_ep->remote_write_cntr);
+				if (mr->domain->rma_ep->caps & FI_RMA_EVENT) {
+					if (mr->domain->rma_ep->remote_write_cntr)
+						psmx_cntr_inc(mr->domain->rma_ep->remote_write_cntr);
 
-				if (mr->cntr && mr->cntr != mr->domain->rma_ep->remote_write_cntr)
-					psmx_cntr_inc(mr->cntr);
+					if (mr->cntr && mr->cntr != mr->domain->rma_ep->remote_write_cntr)
+						psmx_cntr_inc(mr->cntr);
+				}
 			}
 		}
 		if (eom || op_error) {
@@ -203,8 +205,10 @@ int psmx_am_rma_handler(psm_am_token_t token, psm_epaddr_t epaddr,
 				NULL, NULL );
 
 		if (eom && !op_error) {
-			if (mr->domain->rma_ep->remote_read_cntr)
-				psmx_cntr_inc(mr->domain->rma_ep->remote_read_cntr);
+			if (mr->domain->rma_ep->caps & FI_RMA_EVENT) {
+				if (mr->domain->rma_ep->remote_read_cntr)
+					psmx_cntr_inc(mr->domain->rma_ep->remote_read_cntr);
+			}
 		}
 		break;
 
@@ -252,7 +256,7 @@ int psmx_am_rma_handler(psm_am_token_t token, psm_epaddr_t epaddr,
 		if (!req->error)
 			req->error = op_error;
 		if (eom) {
-			if (req->ep->send_cq && !req->no_event) {
+			if (req->ep->send_cq && (!req->no_event || req->error)) {
 				event = psmx_cq_create_event(
 						req->ep->send_cq,
 						req->write.context,
@@ -288,7 +292,7 @@ int psmx_am_rma_handler(psm_am_token_t token, psm_epaddr_t epaddr,
 			req->read.len_read += len;
 		}
 		if (eom) {
-			if (req->ep->send_cq && !req->no_event) {
+			if (req->ep->send_cq && (!req->no_event || req->error)) {
 				event = psmx_cq_create_event(
 						req->ep->send_cq,
 						req->read.context,
@@ -388,17 +392,19 @@ static ssize_t psmx_rma_self(int am_cmd,
 				err = -FI_ENOMEM;
 		}
 
-		if (cntr)
-			psmx_cntr_inc(cntr);
+		if (mr->domain->rma_ep->caps & FI_RMA_EVENT) {
+			if (cntr)
+				psmx_cntr_inc(cntr);
 
-		if (mr_cntr)
-			psmx_cntr_inc(mr_cntr);
+			if (mr_cntr)
+				psmx_cntr_inc(mr_cntr);
+		}
 	}
 
 	no_event = (flags & PSMX_NO_COMPLETION) ||
 		   (ep->send_selective_completion && !(flags & FI_COMPLETION));
 
-	if (ep->send_cq && !no_event) {
+	if (ep->send_cq && (!no_event || op_error)) {
 		event = psmx_cq_create_event(
 				ep->send_cq,
 				context,

@@ -33,14 +33,30 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <fi_enosys.h>
-#include <fi_util.h>
+#include <ofi_enosys.h>
+#include <ofi_util.h>
 
+
+int ofi_domain_bind_eq(struct util_domain *domain, struct util_eq *eq)
+{
+	if (domain->eq) {
+		FI_WARN(domain->prov, FI_LOG_DOMAIN,
+			"duplicate EQ binding\n");
+		return -FI_EINVAL;
+	}
+
+	domain->eq = eq;
+	ofi_atomic_inc32(&eq->ref);
+	return 0;
+}
 
 int ofi_domain_close(struct util_domain *domain)
 {
-	if (atomic_get(&domain->ref))
+	if (ofi_atomic_get32(&domain->ref))
 		return -FI_EBUSY;
+
+	if (domain->mr_map.rbtree)
+		ofi_mr_map_close(&domain->mr_map);
 
 	fastlock_acquire(&domain->fabric->lock);
 	dlist_remove(&domain->list_entry);
@@ -48,7 +64,7 @@ int ofi_domain_close(struct util_domain *domain)
 
 	free(domain->name);
 	fastlock_destroy(&domain->lock);
-	atomic_dec(&domain->fabric->ref);
+	ofi_atomic_dec32(&domain->fabric->ref);
 	return 0;
 }
 
@@ -62,10 +78,11 @@ static struct fi_ops_mr util_domain_mr_ops = {
 static int util_domain_init(struct util_domain *domain,
 			    const struct fi_info *info)
 {
-	atomic_initialize(&domain->ref, 0);
+	ofi_atomic_initialize32(&domain->ref, 0);
 	fastlock_init(&domain->lock);
-	domain->caps = info->caps;
-	domain->mode = info->mode;
+	domain->info_domain_caps = info->caps | info->domain_attr->caps;
+	domain->info_domain_mode = info->mode | info->domain_attr->mode;
+	domain->mr_mode = info->domain_attr->mr_mode;
 	domain->addr_format = info->addr_format;
 	domain->av_type = info->domain_attr->av_type;
 	domain->name = strdup(info->domain_attr->name);
@@ -82,10 +99,8 @@ int ofi_domain_init(struct fid_fabric *fabric_fid, const struct fi_info *info,
 	domain->fabric = fabric;
 	domain->prov = fabric->prov;
 	ret = util_domain_init(domain, info);
-	if (ret) {
-		free(domain);
+	if (ret)
 		return ret;
-	}
 
 	domain->domain_fid.fid.fclass = FI_CLASS_DOMAIN;
 	domain->domain_fid.fid.context = context;
@@ -94,10 +109,17 @@ int ofi_domain_init(struct fid_fabric *fabric_fid, const struct fi_info *info,
 	 */
 	domain->domain_fid.mr = &util_domain_mr_ops;
 
+	ret = ofi_mr_map_init(domain->prov, info->domain_attr->mr_mode,
+			      &domain->mr_map);
+	if (ret) {
+		(void) ofi_domain_close(domain);
+		return ret;
+	}
+
 	fastlock_acquire(&fabric->lock);
 	dlist_insert_tail(&domain->list_entry, &fabric->domain_list);
 	fastlock_release(&fabric->lock);
 
-	atomic_inc(&fabric->ref);
+	ofi_atomic_inc32(&fabric->ref);
 	return 0;
 }
