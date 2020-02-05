@@ -96,7 +96,7 @@ int psmx2_am_sep_handler(psm2_am_token_t token, psm2_amarg_t *args,
 	switch (cmd) {
 	case PSMX2_AM_REQ_SEP_QUERY:
 		sep_id = args[0].u32w1;
-		domain->sep_lock_fn(&domain->sep_lock, 1);
+		psmx2_lock(&domain->sep_lock, 1);
 		entry = dlist_find_first_match(&domain->sep_list, psmx2_am_sep_match,
 					       (void *)(uintptr_t)sep_id);
 		if (!entry) {
@@ -118,7 +118,7 @@ int psmx2_am_sep_handler(psm2_am_token_t token, psm2_amarg_t *args,
 					buf[i] = sep->ctxts[i].trx_ctxt->psm2_epid;
 			}
 		}
-		domain->sep_unlock_fn(&domain->sep_lock, 1);
+		psmx2_unlock(&domain->sep_lock, 1);
 
 		rep_args[0].u32w0 = PSMX2_AM_REP_SEP_QUERY;
 		rep_args[0].u32w1 = op_error;
@@ -210,9 +210,9 @@ static void psmx2_set_epaddr_context(struct psmx2_trx_ctxt *trx_ctxt,
 	context->epaddr = epaddr;
 	psm2_epaddr_setctxt(epaddr, context);
 
-	trx_ctxt->domain->peer_lock_fn(&trx_ctxt->peer_lock, 2);
+	psmx2_lock(&trx_ctxt->peer_lock, 2);
 	dlist_insert_before(&context->entry, &trx_ctxt->peer_list);
-	trx_ctxt->domain->peer_unlock_fn(&trx_ctxt->peer_lock, 2);
+	psmx2_unlock(&trx_ctxt->peer_lock, 2);
 }
 
 int psmx2_epid_to_epaddr(struct psmx2_trx_ctxt *trx_ctxt,
@@ -514,7 +514,7 @@ int psmx2_av_add_trx_ctxt(struct psmx2_fid_av *av,
 	int id = trx_ctxt->id;
 	int err = 0;
 
-	av->domain->av_lock_fn(&av->lock, 1);
+	psmx2_lock(&av->lock, 1);
 
 	if (id >= av->max_trx_ctxt) {
 		FI_WARN(&psmx2_prov, FI_LOG_AV,
@@ -564,7 +564,7 @@ int psmx2_av_add_trx_ctxt(struct psmx2_fid_av *av,
 	}
 
 out:
-	av->domain->av_unlock_fn(&av->lock, 1);
+	psmx2_unlock(&av->lock, 1);
 	return err;
 }
 
@@ -585,7 +585,7 @@ static int psmx2_av_insert(struct fid_av *av, const void *addr,
 
 	av_priv = container_of(av, struct psmx2_fid_av, av);
 
-	av_priv->domain->av_lock_fn(&av_priv->lock, 1);
+	psmx2_lock(&av_priv->lock, 1);
 
 	if ((av_priv->flags & FI_EVENT) && !av_priv->eq) {
 		ret = -FI_ENOEQ;
@@ -680,7 +680,7 @@ static int psmx2_av_insert(struct fid_av *av, const void *addr,
 
 out:
 	free(errors);
-	av_priv->domain->av_unlock_fn(&av_priv->lock, 1);
+	psmx2_unlock(&av_priv->lock, 1);
 	return ret;
 }
 
@@ -706,7 +706,7 @@ static int psmx2_av_lookup(struct fid_av *av, fi_addr_t fi_addr, void *addr,
 
 	memset(&name, 0, sizeof(name));
 
-	av_priv->domain->av_lock_fn(&av_priv->lock, 1);
+	psmx2_lock(&av_priv->lock, 1);
 
 	if (PSMX2_SEP_ADDR_TEST(fi_addr)) {
 		idx = PSMX2_SEP_ADDR_IDX(fi_addr);
@@ -739,7 +739,7 @@ static int psmx2_av_lookup(struct fid_av *av, fi_addr_t fi_addr, void *addr,
 	}
 
 out:
-	av_priv->domain->av_unlock_fn(&av_priv->lock, 1);
+	psmx2_unlock(&av_priv->lock, 1);
 	return err;
 }
 
@@ -753,7 +753,7 @@ psm2_epaddr_t psmx2_av_translate_sep(struct psmx2_fid_av *av,
 	psm2_error_t errors;
 	int err;
 
-	av->domain->av_lock_fn(&av->lock, 1);
+	psmx2_lock(&av->lock, 1);
 
 	if (av->peers[idx].type != PSMX2_EP_SCALABLE ||
 	    ctxt >= av->peers[idx].sep_ctxt_cnt)
@@ -782,7 +782,7 @@ psm2_epaddr_t psmx2_av_translate_sep(struct psmx2_fid_av *av,
 	epaddr = av->tables[trx_ctxt->id].sepaddrs[idx][ctxt];
 
 out:
-	av->domain->av_unlock_fn(&av->lock, 1);
+	psmx2_unlock(&av->lock, 1);
 	return epaddr;
 }
 
@@ -796,7 +796,7 @@ fi_addr_t psmx2_av_translate_source(struct psmx2_fid_av *av, fi_addr_t source)
 	epaddr = PSMX2_ADDR_TO_EP(source);
 	psm2_epaddr_to_epid(epaddr, &epid);
 
-	av->domain->av_lock_fn(&av->lock, 1);
+	psmx2_lock(&av->lock, 1);
 
 	for (i = av->last - 1; i >= 0 && !found; i--) {
 		if (av->peers[i].type == PSMX2_EP_REGULAR) {
@@ -817,7 +817,7 @@ fi_addr_t psmx2_av_translate_source(struct psmx2_fid_av *av, fi_addr_t source)
 		}
 	}
 
-	av->domain->av_unlock_fn(&av->lock, 1);
+	psmx2_unlock(&av->lock, 1);
 	return ret;
 }
 

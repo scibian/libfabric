@@ -284,7 +284,7 @@ ssize_t psmx2_tagged_recv_generic(struct fid_ep *ep, void *buf,
 		PSMX2_CTXT_REQ(fi_context) = psm2_req;
 	} else {
 		#if PSMX2_USE_REQ_CONTEXT
-		PSMX2_REQ_GET_OP_CONTEXT((struct psm2_mq_req_user *)psm2_req, fi_context);
+		PSMX2_REQ_GET_OP_CONTEXT(psm2_req, fi_context);
 		PSMX2_CTXT_TYPE(fi_context) = PSMX2_NOCOMP_TRECV_CONTEXT;
 		PSMX2_CTXT_EP(fi_context) = ep_priv;
 		PSMX2_CTXT_USER(fi_context) = buf;
@@ -370,7 +370,7 @@ psmx2_tagged_recv_specialized(struct fid_ep *ep, void *buf, size_t len,
 		PSMX2_CTXT_REQ(fi_context) = psm2_req;
 	} else {
 		#if PSMX2_USE_REQ_CONTEXT
-		PSMX2_REQ_GET_OP_CONTEXT((struct psm2_mq_req_user *)psm2_req, fi_context);
+		PSMX2_REQ_GET_OP_CONTEXT(psm2_req, fi_context);
 		PSMX2_CTXT_TYPE(fi_context) = PSMX2_NOCOMP_TRECV_CONTEXT;
 		PSMX2_CTXT_EP(fi_context) = ep_priv;
 		PSMX2_CTXT_USER(fi_context) = buf;
@@ -951,6 +951,8 @@ ssize_t psmx2_tagged_sendv_generic(struct fid_ep *ep,
 	req = malloc(sizeof(*req));
 	if (!req)
 		return -FI_ENOMEM;
+
+	PSMX2_STATUS_INIT(req->status);
 
 	if (total_len <= PSMX2_IOV_BUF_SIZE) {
 		req->iov_protocol = PSMX2_IOV_PROTO_PACK;

@@ -35,10 +35,10 @@
 void psmx2_cq_enqueue_event(struct psmx2_fid_cq *cq,
 			    struct psmx2_cq_event *event)
 {
-	cq->domain->cq_lock_fn(&cq->lock, 2);
+	psmx2_lock(&cq->lock, 2);
 	slist_insert_tail(&event->list_entry, &cq->event_queue);
 	cq->event_count++;
-	cq->domain->cq_unlock_fn(&cq->lock, 2);
+	psmx2_unlock(&cq->lock, 2);
 
 	if (cq->wait)
 		cq->wait->signal(cq->wait);
@@ -48,14 +48,14 @@ static struct psmx2_cq_event *psmx2_cq_dequeue_event(struct psmx2_fid_cq *cq)
 {
 	struct slist_entry *entry;
 
-	cq->domain->cq_lock_fn(&cq->lock, 2);
+	psmx2_lock(&cq->lock, 2);
 	if (slist_empty(&cq->event_queue)) {
-		cq->domain->cq_unlock_fn(&cq->lock, 2);
+		psmx2_unlock(&cq->lock, 2);
 		return NULL;
 	}
 	entry = slist_remove_head(&cq->event_queue);
 	cq->event_count--;
-	cq->domain->cq_unlock_fn(&cq->lock, 2);
+	psmx2_unlock(&cq->lock, 2);
 
 	return container_of(entry, struct psmx2_cq_event, list_entry);
 }
@@ -64,15 +64,15 @@ static struct psmx2_cq_event *psmx2_cq_alloc_event(struct psmx2_fid_cq *cq)
 {
 	struct psmx2_cq_event *event;
 
-	cq->domain->cq_lock_fn(&cq->lock, 2);
+	psmx2_lock(&cq->lock, 2);
 	if (!slist_empty(&cq->free_list)) {
 		event = container_of(slist_remove_head(&cq->free_list),
 				     struct psmx2_cq_event, list_entry);
-		cq->domain->cq_unlock_fn(&cq->lock, 2);
+		psmx2_unlock(&cq->lock, 2);
 		return event;
 	}
 
-	cq->domain->cq_unlock_fn(&cq->lock, 2);
+	psmx2_unlock(&cq->lock, 2);
 	event = calloc(1, sizeof(*event));
 	if (!event)
 		FI_WARN(&psmx2_prov, FI_LOG_CQ, "out of memory.\n");
@@ -85,9 +85,9 @@ static void psmx2_cq_free_event(struct psmx2_fid_cq *cq,
 {
 	memset(event, 0, sizeof(*event));
 
-	cq->domain->cq_lock_fn(&cq->lock, 2);
+	psmx2_lock(&cq->lock, 2);
 	slist_insert_tail(&event->list_entry, &cq->free_list);
-	cq->domain->cq_unlock_fn(&cq->lock, 2);
+	psmx2_unlock(&cq->lock, 2);
 }
 
 struct psmx2_cq_event *psmx2_cq_create_event(struct psmx2_fid_cq *cq,
@@ -160,7 +160,8 @@ out:
  *
  * (1) the CQE is for the CQ being polled; and
  * (2) event buffer is supplied (event_in != NULL); and
- * (3) the CQE is not an error entry,
+ * (3) the buffer is large enough (count > read_count); and
+ * (4) the CQE is not an error entry,
  *
  * then the event is written to the event buffer directly. Otherwise a CQE is
  * allocated on the corresponding CQ.
@@ -171,9 +172,9 @@ out:
  * in advance and passed in as separate parameters ("op_context", "buf",
  * "flags", "data", and "is_recv").
  *
- * The flag "event_saved" is set to indicate to the caller that the event
- * was saved to the user's provided buffer, otherwise the event was an error
- * or the event has been saved to the comp_cq slist.
+ * The flag "read_more" is set to 1 by the caller. The function set it to 0
+ * if the stop condition is satisfied (event buffer is full or an error event
+ * is added to the polling CQ).
  */
 
 __attribute__((always_inline))
@@ -186,16 +187,16 @@ static inline int psmx2_cq_any_complete(struct psmx2_fid_cq *poll_cq,
 					uint64_t flags,
 					uint64_t data,
 					struct psmx2_cq_event *event_in,
-					int *event_saved,
+					int count,
+					int *read_count,
+					int *read_more,
 					fi_addr_t *src_addr,
 					int is_recv)
 {
-	struct psmx2_cq_event *event = event_in;
-
-	*event_saved = 1;
+	void *event_buffer;
+	struct psmx2_cq_event *event;
 
 	if (OFI_UNLIKELY(PSMX2_STATUS_ERROR(status))) {
-		*event_saved = 0;
 		event = psmx2_cq_alloc_event(comp_cq);
 		if (!event)
 			return -FI_ENOMEM;
@@ -210,49 +211,26 @@ static inline int psmx2_cq_any_complete(struct psmx2_fid_cq *poll_cq,
 		event->cqe.err.data = data;
 
 		psmx2_cq_enqueue_event(comp_cq, event);
+
+		if (poll_cq == comp_cq)
+			*read_more = 0;
+
 		return 0;
 	}
 
-	if (OFI_UNLIKELY(poll_cq != comp_cq || !event)) {
-		*event_saved = 0;
+	/*
+	 * NOTE: "event_in" only has space for the CQE of the current CQ format.
+	 * Fields like "error" and "source" should not be filled in.
+	 */
+	if (OFI_LIKELY(poll_cq == comp_cq && event_in && count && *read_count < count)) {
+		event_buffer = (uint8_t *)event_in + comp_cq->entry_size * (*read_count);
+		event = event_in = (struct psmx2_cq_event *)event_buffer;
+	} else {
 		event = psmx2_cq_alloc_event(comp_cq);
 		if (!event)
 			return -FI_ENOMEM;
 
 		event->error = 0;
-	}
-
-	if (is_recv) {
-		fi_addr_t source = PSMX2_EP_TO_ADDR(PSMX2_STATUS_PEER(status));
-
-		if (event == event_in) {
-			if (src_addr) {
-				src_addr[0] = psmx2_av_translate_source(av, source);
-				if (src_addr[0] == FI_ADDR_NOTAVAIL) {
-					*event_saved = 0;
-					event = psmx2_cq_alloc_event(comp_cq);
-					if (!event)
-						return -FI_ENOMEM;
-
-					event->cqe = event_in->cqe;
-					event->cqe.err.err = FI_EADDRNOTAVAIL;
-					event->cqe.err.err_data = &comp_cq->error_data;
-					event->error = !!event->cqe.err.err;
-					if (av->addr_format == FI_ADDR_STR) {
-						event->cqe.err.err_data_size = PSMX2_ERR_DATA_SIZE;
-						psmx2_get_source_string_name(source, (void *)&comp_cq->error_data,
-										 &event->cqe.err.err_data_size);
-					} else {
-						psmx2_get_source_name(source, (void *)&comp_cq->error_data);
-						event->cqe.err.err_data_size = sizeof(struct psmx2_ep_name);
-					}
-				}
-			}
-		} else {
-			event->source_is_valid = 1;
-			event->source = source;
-			event->source_av = av;
-		}
 	}
 
 	switch (comp_cq->format) {
@@ -291,8 +269,47 @@ static inline int psmx2_cq_any_complete(struct psmx2_fid_cq *poll_cq,
 		return -FI_EINVAL;
 	}
 
-	if (OFI_UNLIKELY(event != event_in))
+	if (is_recv) {
+		fi_addr_t source = PSMX2_EP_TO_ADDR(PSMX2_STATUS_PEER(status));
+
+		if (event == event_in) {
+			if (src_addr) {
+				src_addr[*read_count] = psmx2_av_translate_source(av, source);
+				if (src_addr[*read_count] == FI_ADDR_NOTAVAIL) {
+					event = psmx2_cq_alloc_event(comp_cq);
+					if (!event)
+						return -FI_ENOMEM;
+
+					event->cqe = event_in->cqe;
+					event->cqe.err.err = FI_EADDRNOTAVAIL;
+					event->cqe.err.err_data = &comp_cq->error_data;
+					event->error = !!event->cqe.err.err;
+					if (av->addr_format == FI_ADDR_STR) {
+						event->cqe.err.err_data_size = PSMX2_ERR_DATA_SIZE;
+						psmx2_get_source_string_name(source, (void *)&comp_cq->error_data,
+									     &event->cqe.err.err_data_size);
+					} else {
+						psmx2_get_source_name(source, (void *)&comp_cq->error_data);
+						event->cqe.err.err_data_size = sizeof(struct psmx2_ep_name);
+					}
+
+					*read_more = 0;
+				}
+			}
+		} else {
+			event->source_is_valid = 1;
+			event->source = source;
+			event->source_av = av;
+		}
+	}
+
+	if (OFI_LIKELY(event == event_in)) {
+		(*read_count)++;
+		if (*read_count >= count)
+			*read_more = 0;
+	} else {
 		psmx2_cq_enqueue_event(comp_cq, event);
+	}
 
 	return 0;
 }
@@ -306,11 +323,14 @@ static inline int psmx2_cq_tx_complete(struct psmx2_fid_cq *poll_cq,
 				       uint64_t flags,
 				       uint64_t data,
 				       struct psmx2_cq_event *event_in,
-				       int *event_saved)
+				       int count,
+				       int *read_count,
+				       int *read_more)
 {
 	return psmx2_cq_any_complete(poll_cq, comp_cq, av, status,
 				     op_context, buf, flags, data,
-				     event_in, event_saved, NULL, 0);
+				     event_in, count, read_count,
+				     read_more, NULL, 0);
 }
 
 static inline int psmx2_cq_rx_complete(struct psmx2_fid_cq *poll_cq,
@@ -322,12 +342,15 @@ static inline int psmx2_cq_rx_complete(struct psmx2_fid_cq *poll_cq,
 				       uint64_t flags,
 				       uint64_t data,
 				       struct psmx2_cq_event *event_in,
-				       fi_addr_t *src_addr,
-				       int *event_saved)
+				       int count,
+				       int *read_count,
+				       int *read_more,
+				       fi_addr_t *src_addr)
 {
 	return psmx2_cq_any_complete(poll_cq, comp_cq, av, status,
 				     op_context, buf, flags, data,
-				     event_in, event_saved, src_addr, 1);
+				     event_in, count, read_count,
+				     read_more, src_addr, 1);
 }
 
 static uint64_t psmx2_comp_flags[PSMX2_MAX_CONTEXT_TYPE] = {
@@ -351,9 +374,12 @@ static uint64_t psmx2_comp_flags[PSMX2_MAX_CONTEXT_TYPE] = {
 	[PSMX2_IOV_RECV_CONTEXT]	= FI_RECV,
 };
 
-int
-psmx2_mq_status_copy(struct psm2_mq_req_user *req, void *status_array, int entry_index)
+int psmx2_cq_poll_mq(struct psmx2_fid_cq *cq,
+		     struct psmx2_trx_ctxt *trx_ctxt,
+		     struct psmx2_cq_event *event_in,
+		     int count, fi_addr_t *src_addr)
 {
+	PSMX2_STATUS_DECL(status);
 	struct fi_context *fi_context;
 	struct psmx2_fid_ep *ep;
 	struct psmx2_fid_mr *mr;
@@ -367,468 +393,556 @@ psmx2_mq_status_copy(struct psm2_mq_req_user *req, void *status_array, int entry
 	void *buf;
 	uint64_t flags;
 	uint64_t data;
+	int read_count = 0;
+	int read_more = 1;
 	int err;
 	int context_type;
-	int event_saved = 0;
-	void *entry = NULL;
 
-	struct psmx2_status_data *status_data = status_array;
+	PSMX2_STATUS_INIT(status);
 
-	if (OFI_LIKELY(status_data->event_buffer && status_data->poll_cq))
-		entry = (uint8_t *)status_data->event_buffer +
-				(entry_index * status_data->poll_cq->entry_size);
+	while (read_more) {
 
-	fi_context = PSMX2_STATUS_CONTEXT(req);
+		PSMX2_POLL_COMPLETION(trx_ctxt, status, err);
 
-	if (OFI_UNLIKELY(!fi_context))
-		return 0;
-
-	context_type = (int)PSMX2_CTXT_TYPE(fi_context);
-	flags = psmx2_comp_flags[context_type];
-	ep = PSMX2_CTXT_EP(fi_context);
-
-	switch (context_type) {
-	case PSMX2_SEND_CONTEXT:
-	case PSMX2_TSEND_CONTEXT:
-		if (ep->send_cq) {
-			op_context = fi_context;
-			buf = PSMX2_CTXT_USER(fi_context);
-			err = psmx2_cq_tx_complete(
-					status_data->poll_cq, ep->send_cq, ep->av,
-					req, op_context, buf, flags, 0,
-					entry, &event_saved);
-			if (OFI_UNLIKELY(err))
-				return err;
-		}
-		if (ep->send_cntr)
-			psmx2_cntr_inc(ep->send_cntr, PSMX2_STATUS_ERROR(req));
-
-		/* Bi-directional send/recv performance tweak for KNL */
-		if (event_saved && PSMX2_STATUS_SNDLEN(req) > 16384)
-			event_saved++;
-		break;
-
-	case PSMX2_NOCOMP_SEND_CONTEXT:
-	case PSMX2_NOCOMP_TSEND_CONTEXT:
-		if (OFI_UNLIKELY(ep->send_cq && PSMX2_STATUS_ERROR(req))) {
-			err = psmx2_cq_tx_complete(
-					status_data->poll_cq, ep->send_cq, ep->av,
-					req, NULL, NULL, flags, 0,
-					entry, &event_saved);
-			if (OFI_UNLIKELY(err))
-				return err;
-		}
-		if (ep->send_cntr)
-			psmx2_cntr_inc(ep->send_cntr, PSMX2_STATUS_ERROR(req));
-		break;
-
-	case PSMX2_RECV_CONTEXT:
-		if (OFI_UNLIKELY(PSMX2_IS_IOV_HEADER(PSMX2_GET_FLAGS(PSMX2_STATUS_TAG(req))) &&
-				  !psmx2_handle_sendv_req(ep, req, 0))) {
-			return 0;
-		}
-		if (ep->recv_cq) {
-			op_context = fi_context;
-			buf = PSMX2_CTXT_USER(fi_context);
-			data = 0;
-			if (PSMX2_HAS_IMM(PSMX2_GET_FLAGS(PSMX2_STATUS_TAG(req)))) {
-				flags |= FI_REMOTE_CQ_DATA;
-				data = PSMX2_GET_CQDATA(PSMX2_STATUS_TAG(req));
+		if (err == PSM2_OK) {
+			fi_context = PSMX2_STATUS_CONTEXT(status);
+			if (OFI_UNLIKELY(!fi_context)) {
+				PSMX2_FREE_COMPLETION(trx_ctxt, status);
+				continue;
 			}
-			err = psmx2_cq_rx_complete(
-					status_data->poll_cq, ep->recv_cq, ep->av,
-					req, op_context, buf, flags, data,
-					entry, status_data->src_addr, &event_saved);
-			if (OFI_UNLIKELY(err))
-				return err;
-		}
-		if (ep->recv_cntr)
-			psmx2_cntr_inc(ep->recv_cntr, PSMX2_STATUS_ERROR(req));
-		break;
 
-	case PSMX2_TRECV_CONTEXT:
-		if (OFI_UNLIKELY(PSMX2_IS_IOV_HEADER(PSMX2_GET_FLAGS(PSMX2_STATUS_TAG(req))) &&
-				 !psmx2_handle_sendv_req(ep, req, 0))) {
-			return 0;
-		}
-		if (ep->recv_cq) {
-			op_context = fi_context;
-			buf = PSMX2_CTXT_USER(fi_context);
-			data = 0;
-			if (PSMX2_HAS_IMM(PSMX2_GET_FLAGS(PSMX2_STATUS_TAG(req)))) {
-				flags |= FI_REMOTE_CQ_DATA;
-				data = PSMX2_GET_CQDATA(PSMX2_STATUS_TAG(req));
-			}
-			err = psmx2_cq_rx_complete(
-					status_data->poll_cq, ep->recv_cq, ep->av,
-					req, op_context, buf, flags, data,
-					entry, status_data->src_addr, &event_saved);
-			if (OFI_UNLIKELY(err))
-				return err;
-		}
-		if (ep->recv_cntr)
-			psmx2_cntr_inc(ep->recv_cntr, PSMX2_STATUS_ERROR(req));
-		break;
+			ep = PSMX2_CTXT_EP(fi_context);
+			context_type = (int)PSMX2_CTXT_TYPE(fi_context);
 
-	case PSMX2_NOCOMP_RECV_CONTEXT:
-		if (OFI_UNLIKELY(PSMX2_IS_IOV_HEADER(PSMX2_GET_FLAGS(PSMX2_STATUS_TAG(req))) &&
-				 !psmx2_handle_sendv_req(ep, req, 0))) {
-			PSMX2_EP_PUT_OP_CONTEXT(ep, fi_context);
-			return 0;
-		}
-		PSMX2_EP_PUT_OP_CONTEXT(ep, fi_context);
-		if (OFI_UNLIKELY(ep->recv_cq && PSMX2_STATUS_ERROR(req))) {
-			data = 0;
-			if (PSMX2_HAS_IMM(PSMX2_GET_FLAGS(PSMX2_STATUS_TAG(req)))) {
-				flags |= FI_REMOTE_CQ_DATA;
-				data = PSMX2_GET_CQDATA(PSMX2_STATUS_TAG(req));
-			}
-			err = psmx2_cq_rx_complete(
-					status_data->poll_cq, ep->recv_cq, ep->av,
-					req, NULL, NULL, flags, data,
-					entry, status_data->src_addr, &event_saved);
-			if (OFI_UNLIKELY(err))
-				return err;
-		}
-		if (ep->recv_cntr)
-			psmx2_cntr_inc(ep->recv_cntr, PSMX2_STATUS_ERROR(req));
-		break;
-
-	case PSMX2_NOCOMP_TRECV_CONTEXT:
-		if (OFI_UNLIKELY(PSMX2_IS_IOV_HEADER(PSMX2_GET_FLAGS(PSMX2_STATUS_TAG(req))) &&
-				 !psmx2_handle_sendv_req(ep, req, 0))) {
-			PSMX2_EP_PUT_OP_CONTEXT(ep, fi_context);
-			return 0;
-		}
-		PSMX2_EP_PUT_OP_CONTEXT(ep, fi_context);
-		if (OFI_UNLIKELY(ep->recv_cq && PSMX2_STATUS_ERROR(req))) {
-			err = psmx2_cq_rx_complete(
-					status_data->poll_cq, ep->recv_cq, ep->av,
-					req, NULL, NULL, flags, 0,
-					entry, status_data->src_addr, &event_saved);
-			if (OFI_UNLIKELY(err))
-				return err;
-		}
-		if (ep->recv_cntr)
-			psmx2_cntr_inc(ep->recv_cntr, PSMX2_STATUS_ERROR(req));
-		break;
-
-	case PSMX2_WRITE_CONTEXT:
-		am_req = container_of(fi_context, struct psmx2_am_request,
-					  fi_context);
-		op_context = PSMX2_CTXT_USER(fi_context);
-		free(am_req->tmpbuf);
-		psmx2_am_request_free(status_data->trx_ctxt, am_req);
-		if (ep->send_cq) {
-			err = psmx2_cq_tx_complete(
-					status_data->poll_cq, ep->send_cq, ep->av,
-					req, op_context, NULL, flags, 0,
-					entry, &event_saved);
-			if (OFI_UNLIKELY(err))
-				return err;
-		}
-		if (ep->write_cntr)
-			psmx2_cntr_inc(ep->write_cntr, PSMX2_STATUS_ERROR(req));
-		break;
-
-	case PSMX2_NOCOMP_WRITE_CONTEXT:
-		am_req = container_of(fi_context, struct psmx2_am_request,
-					  fi_context);
-		op_context = PSMX2_CTXT_USER(fi_context);
-		free(am_req->tmpbuf);
-		psmx2_am_request_free(status_data->trx_ctxt, am_req);
-		if (OFI_UNLIKELY(ep->send_cq && PSMX2_STATUS_ERROR(req))) {
-			err = psmx2_cq_tx_complete(
-					status_data->poll_cq, ep->send_cq, ep->av,
-					req, op_context, NULL, flags, 0,
-					entry, &event_saved);
-			if (OFI_UNLIKELY(err))
-				return err;
-		}
-		if (ep->write_cntr)
-			psmx2_cntr_inc(ep->write_cntr, PSMX2_STATUS_ERROR(req));
-		break;
-
-	case PSMX2_READ_CONTEXT:
-		am_req = container_of(fi_context, struct psmx2_am_request,
-					  fi_context);
-		if (OFI_UNLIKELY(am_req->op == PSMX2_AM_REQ_READV)) {
-			am_req->read.len_read += PSMX2_STATUS_RCVLEN(req);
-			if (am_req->read.len_read < am_req->read.len) {
-				FI_INFO(&psmx2_prov, FI_LOG_EP_DATA,
-					"readv: long protocol finishes early\n");
-				if (PSMX2_STATUS_ERROR(req))
-					am_req->error = psmx2_errno(PSMX2_STATUS_ERROR(req));
-				/* Request to be freed in AM handler */
-				return 0;
-			}
-		}
-		op_context = PSMX2_CTXT_USER(fi_context);
-		free(am_req->tmpbuf);
-		psmx2_am_request_free(status_data->trx_ctxt, am_req);
-		if (ep->send_cq) {
-			err = psmx2_cq_tx_complete(
-					status_data->poll_cq, ep->send_cq, ep->av,
-					req, op_context, NULL, flags, 0,
-					entry, &event_saved);
-			if (OFI_UNLIKELY(err))
-				return err;
-		}
-		if (ep->read_cntr)
-			psmx2_cntr_inc(ep->read_cntr, PSMX2_STATUS_ERROR(req));
-		break;
-
-	case PSMX2_NOCOMP_READ_CONTEXT:
-		am_req = container_of(fi_context, struct psmx2_am_request,
-					  fi_context);
-		if (OFI_UNLIKELY(am_req->op == PSMX2_AM_REQ_READV)) {
-			am_req->read.len_read += PSMX2_STATUS_RCVLEN(req);
-			if (am_req->read.len_read < am_req->read.len) {
-				FI_INFO(&psmx2_prov, FI_LOG_EP_DATA,
-					"readv: long protocol finishes early\n");
-				if (PSMX2_STATUS_ERROR(req))
-					am_req->error = psmx2_errno(PSMX2_STATUS_ERROR(req));
-				/* Request to be freed in AM handler */
-				return 0;
-			}
-		}
-		op_context = PSMX2_CTXT_USER(fi_context);
-		free(am_req->tmpbuf);
-		psmx2_am_request_free(status_data->trx_ctxt, am_req);
-		if (OFI_UNLIKELY(ep->send_cq && PSMX2_STATUS_ERROR(req))) {
-			err = psmx2_cq_tx_complete(
-					status_data->poll_cq, ep->send_cq, ep->av,
-					req, op_context, NULL, flags, 0,
-					entry, &event_saved);
-			if (OFI_UNLIKELY(err))
-				return err;
-		}
-		if (ep->read_cntr)
-			psmx2_cntr_inc(ep->read_cntr, PSMX2_STATUS_ERROR(req));
-		break;
-
-	case PSMX2_MULTI_RECV_CONTEXT:
-		if (OFI_UNLIKELY(PSMX2_IS_IOV_HEADER(PSMX2_GET_FLAGS(PSMX2_STATUS_TAG(req))) &&
-			!psmx2_handle_sendv_req(ep, req, 1))) {
-			return 0;
-		}
-		multi_recv_req = PSMX2_CTXT_USER(fi_context);
-		if (ep->recv_cq) {
-			op_context = fi_context;
-			buf = multi_recv_req->buf + multi_recv_req->offset;
-			data = 0;
-			if (PSMX2_HAS_IMM(PSMX2_GET_FLAGS(PSMX2_STATUS_TAG(req)))) {
-				flags |= FI_REMOTE_CQ_DATA;
-				data = PSMX2_GET_CQDATA(PSMX2_STATUS_TAG(req));
-			}
-			if (multi_recv_req->offset + PSMX2_STATUS_RCVLEN(req) +
-				multi_recv_req->min_buf_size > multi_recv_req->len)
-				flags |= FI_MULTI_RECV;	/* buffer used up */
-			err = psmx2_cq_rx_complete(
-					status_data->poll_cq, ep->recv_cq, ep->av,
-					req, op_context, buf, flags, data,
-					entry, status_data->src_addr, &event_saved);
-			if (OFI_UNLIKELY(err))
-				return err;
-		}
-		if (ep->recv_cntr)
-			psmx2_cntr_inc(ep->recv_cntr, PSMX2_STATUS_ERROR(req));
-
-		/* repost multi-recv buffer */
-		multi_recv_req->offset += PSMX2_STATUS_RCVLEN(req);
-		len_remaining = multi_recv_req->len - multi_recv_req->offset;
-		if (len_remaining >= multi_recv_req->min_buf_size) {
-			if (len_remaining > PSMX2_MAX_MSG_SIZE)
-				len_remaining = PSMX2_MAX_MSG_SIZE;
-			err = psm2_mq_irecv2(ep->rx->psm2_mq,
-						 multi_recv_req->src_addr, &multi_recv_req->tag,
-						 &multi_recv_req->tagsel, multi_recv_req->flag,
-						 multi_recv_req->buf + multi_recv_req->offset,
-						 len_remaining,
-						 (void *)fi_context, &psm2_req);
-			if (OFI_UNLIKELY(err != PSM2_OK))
-				return psmx2_errno(err);
-			PSMX2_CTXT_REQ(fi_context) = psm2_req;
-		} else {
-			free(multi_recv_req);
-		}
-		break;
-
-	case PSMX2_REMOTE_WRITE_CONTEXT:
-		am_req = container_of(fi_context, struct psmx2_am_request, fi_context);
-		if (am_req->op & PSMX2_AM_FORCE_ACK) {
-			am_req->error = psmx2_errno(PSMX2_STATUS_ERROR(req));
-			psmx2_am_ack_rma(am_req);
-		}
-
-		if (am_req->ep->recv_cq && (am_req->cq_flags & FI_REMOTE_CQ_DATA)) {
-			flags |= FI_REMOTE_CQ_DATA;
-			err = psmx2_cq_rx_complete(
-					status_data->poll_cq, am_req->ep->recv_cq, am_req->ep->av,
-					req, NULL, NULL, flags, am_req->write.data,
-					entry, status_data->src_addr, &event_saved);
-			if (OFI_UNLIKELY(err)) {
-				psmx2_am_request_free(status_data->trx_ctxt, am_req);
-				return err;
-			}
-		}
-
-		if (am_req->ep->caps & FI_RMA_EVENT) {
-			if (am_req->ep->remote_write_cntr)
-				psmx2_cntr_inc(am_req->ep->remote_write_cntr, 0);
-
-			mr = PSMX2_CTXT_USER(fi_context);
-			if (mr->cntr && mr->cntr != am_req->ep->remote_write_cntr)
-				psmx2_cntr_inc(mr->cntr, 0);
-		}
-
-		/* NOTE: am_req->tmpbuf is unused here */
-		psmx2_am_request_free(status_data->trx_ctxt, am_req);
-		break;
-
-	case PSMX2_REMOTE_READ_CONTEXT:
-		am_req = container_of(fi_context, struct psmx2_am_request, fi_context);
-		if (am_req->ep->caps & FI_RMA_EVENT) {
-			if (am_req->ep->remote_read_cntr)
-				psmx2_cntr_inc(am_req->ep->remote_read_cntr, 0);
-		}
-
-		/* NOTE: am_req->tmpbuf is unused here */
-		psmx2_am_request_free(status_data->trx_ctxt, am_req);
-		break;
-
-	case PSMX2_SENDV_CONTEXT:
-		sendv_req = PSMX2_CTXT_USER(fi_context);
-		sendv_req->iov_done++;
-		if (sendv_req->iov_protocol == PSMX2_IOV_PROTO_MULTI &&
-			sendv_req->iov_done < sendv_req->iov_info.count + 1) {
-			sendv_req->tag = req->tag;
-			return 0;
-		}
-		if (ep->send_cq && !sendv_req->no_completion) {
-			op_context = sendv_req->user_context;
-			flags |= sendv_req->comp_flag;
-			err = psmx2_cq_tx_complete(
-					status_data->poll_cq, ep->send_cq, ep->av,
-					req, op_context, NULL, flags, 0,
-					entry, &event_saved);
-			if (OFI_UNLIKELY(err)) {
-				free(sendv_req);
-				return err;
-			}
-		}
-		if (ep->send_cntr)
-			psmx2_cntr_inc(ep->send_cntr, PSMX2_STATUS_ERROR(req));
-		free(sendv_req);
-		break;
-
-	case PSMX2_IOV_SEND_CONTEXT:
-		sendv_req = PSMX2_CTXT_USER(fi_context);
-		sendv_req->iov_done++;
-		if (sendv_req->iov_done < sendv_req->iov_info.count + 1)
-			return 0;
-		req->tag = sendv_req->tag;
-		if (ep->send_cq && !sendv_req->no_completion) {
-			op_context = sendv_req->user_context;
-			flags |= sendv_req->comp_flag;
-			err = psmx2_cq_tx_complete(
-					status_data->poll_cq, ep->send_cq, ep->av,
-					req, op_context, NULL, flags, 0,
-					entry, &event_saved);
-			if (OFI_UNLIKELY(err)) {
-				free(sendv_req);
-				return err;
-			}
-		}
-		if (ep->send_cntr)
-			psmx2_cntr_inc(ep->send_cntr, PSMX2_STATUS_ERROR(req));
-		free(sendv_req);
-		break;
-
-	case PSMX2_IOV_RECV_CONTEXT:
-		sendv_rep = PSMX2_CTXT_USER(fi_context);
-		sendv_rep->iov_done++;
-		sendv_rep->msg_length += PSMX2_STATUS_SNDLEN(req);
-		sendv_rep->bytes_received += PSMX2_STATUS_RCVLEN(req);
-		if (PSMX2_STATUS_ERROR(req) != PSM2_OK)
-			sendv_rep->error_code = PSMX2_STATUS_ERROR(req);
-		if (sendv_rep->iov_done < sendv_rep->iov_info.count)
-			return 0;
-
-		PSMX2_STATUS_TAG(req) = sendv_rep->tag;
-		PSMX2_STATUS_RCVLEN(req) = sendv_rep->bytes_received;
-		PSMX2_STATUS_SNDLEN(req) = sendv_rep->msg_length;
-		PSMX2_STATUS_ERROR(req) = sendv_rep->error_code;
-
-		if (ep->recv_cq && !sendv_rep->no_completion) {
-			op_context = sendv_rep->user_context;
-			buf = sendv_rep->buf;
-			flags |= sendv_rep->comp_flag;
-			err = psmx2_cq_rx_complete(
-					status_data->poll_cq, ep->recv_cq, ep->av,
-					req, op_context, buf, flags, 0,
-					entry, status_data->src_addr, &event_saved);
-			if (OFI_UNLIKELY(err)) {
-				free(sendv_rep);
-				return err;
-			}
-		}
-		if (ep->recv_cntr)
-			psmx2_cntr_inc(ep->recv_cntr, PSMX2_STATUS_ERROR(req));
-
-		if (sendv_rep->multi_recv) {
-			/* repost the multi-recv buffer */
-			fi_context = sendv_rep->user_context;
-			multi_recv_req = PSMX2_CTXT_USER(fi_context);
-			multi_recv_req->offset += PSMX2_STATUS_RCVLEN(req);
-			len_remaining = multi_recv_req->len - multi_recv_req->offset;
-			if (len_remaining >= multi_recv_req->min_buf_size) {
-				if (len_remaining > PSMX2_MAX_MSG_SIZE)
-					len_remaining = PSMX2_MAX_MSG_SIZE;
-				err = psm2_mq_irecv2(ep->rx->psm2_mq,
-							 multi_recv_req->src_addr, &multi_recv_req->tag,
-							 &multi_recv_req->tagsel, multi_recv_req->flag,
-							 multi_recv_req->buf + multi_recv_req->offset,
-							 len_remaining,
-							 (void *)fi_context, &psm2_req);
-				if (OFI_UNLIKELY(err != PSM2_OK)) {
-					free(sendv_rep);
-					return psmx2_errno(err);
+			switch (context_type) {
+			case PSMX2_SEND_CONTEXT:
+			case PSMX2_TSEND_CONTEXT:
+				if (ep->send_cq) {
+					op_context = fi_context;
+					buf = PSMX2_CTXT_USER(fi_context);
+					flags = psmx2_comp_flags[context_type];
+					err = psmx2_cq_tx_complete(
+							cq, ep->send_cq, ep->av,
+							status, op_context, buf, flags, 0,
+							event_in, count, &read_count,
+							&read_more);
+					if (err) {
+						PSMX2_FREE_COMPLETION(trx_ctxt, status);
+						return err;
+					}
 				}
-				PSMX2_CTXT_REQ(fi_context) = psm2_req;
-			} else {
-				free(multi_recv_req);
+				if (ep->send_cntr)
+					psmx2_cntr_inc(ep->send_cntr, PSMX2_STATUS_ERROR(status));
+
+				/* Bi-directional send/recv performance tweak for KNL */
+				if (PSMX2_STATUS_SNDLEN(status) > 16384)
+					read_more = 0;
+
+				PSMX2_FREE_COMPLETION(trx_ctxt, status);
+				break;
+
+			case PSMX2_NOCOMP_SEND_CONTEXT:
+			case PSMX2_NOCOMP_TSEND_CONTEXT:
+				if (ep->send_cq && PSMX2_STATUS_ERROR(status)) {
+					op_context = NULL;
+					buf = NULL;
+					flags = psmx2_comp_flags[context_type];
+					err = psmx2_cq_tx_complete(
+							cq, ep->send_cq, ep->av,
+							status, op_context, buf, flags, 0,
+							event_in, count, &read_count,
+							&read_more);
+					if (err) {
+						PSMX2_FREE_COMPLETION(trx_ctxt, status);
+						return err;
+					}
+				}
+				if (ep->send_cntr)
+					psmx2_cntr_inc(ep->send_cntr, PSMX2_STATUS_ERROR(status));
+				PSMX2_FREE_COMPLETION(trx_ctxt, status);
+				break;
+
+			case PSMX2_RECV_CONTEXT:
+				if (OFI_UNLIKELY(PSMX2_IS_IOV_HEADER(PSMX2_GET_FLAGS(PSMX2_STATUS_TAG(status))) &&
+						  !psmx2_handle_sendv_req(ep, status, 0))) {
+					PSMX2_FREE_COMPLETION(trx_ctxt, status);
+					continue;
+				}
+				if (ep->recv_cq) {
+					op_context = fi_context;
+					buf = PSMX2_CTXT_USER(fi_context);
+					flags = psmx2_comp_flags[context_type];
+					if (PSMX2_HAS_IMM(PSMX2_GET_FLAGS(PSMX2_STATUS_TAG(status)))) {
+						flags |= FI_REMOTE_CQ_DATA;
+						data = PSMX2_GET_CQDATA(PSMX2_STATUS_TAG(status));
+					} else {
+						data = 0;
+					}
+					err = psmx2_cq_rx_complete(
+							cq, ep->recv_cq, ep->av,
+							status, op_context, buf, flags, data,
+							event_in, count, &read_count,
+							&read_more, src_addr);
+					if (err) {
+						PSMX2_FREE_COMPLETION(trx_ctxt, status);
+						return err;
+					}
+				}
+				if (ep->recv_cntr)
+					psmx2_cntr_inc(ep->recv_cntr, PSMX2_STATUS_ERROR(status));
+				PSMX2_FREE_COMPLETION(trx_ctxt, status);
+				break;
+
+			case PSMX2_TRECV_CONTEXT:
+				if (OFI_UNLIKELY(PSMX2_IS_IOV_HEADER(PSMX2_GET_FLAGS(PSMX2_STATUS_TAG(status))) &&
+						 !psmx2_handle_sendv_req(ep, status, 0))) {
+					PSMX2_FREE_COMPLETION(trx_ctxt, status);
+					continue;
+				}
+				if (ep->recv_cq) {
+					op_context = fi_context;
+					buf = PSMX2_CTXT_USER(fi_context);
+					flags = psmx2_comp_flags[context_type];
+					if (PSMX2_HAS_IMM(PSMX2_GET_FLAGS(PSMX2_STATUS_TAG(status)))) {
+						flags |= FI_REMOTE_CQ_DATA;
+						data = PSMX2_GET_CQDATA(PSMX2_STATUS_TAG(status));
+					} else {
+						data = 0;
+					}
+					err = psmx2_cq_rx_complete(
+							cq, ep->recv_cq, ep->av,
+							status, op_context, buf, flags, data,
+							event_in, count, &read_count,
+							&read_more, src_addr);
+					if (err) {
+						PSMX2_FREE_COMPLETION(trx_ctxt, status);
+						return err;
+					}
+				}
+				if (ep->recv_cntr)
+					psmx2_cntr_inc(ep->recv_cntr, PSMX2_STATUS_ERROR(status));
+				PSMX2_FREE_COMPLETION(trx_ctxt, status);
+				break;
+
+			case PSMX2_NOCOMP_RECV_CONTEXT:
+				if (OFI_UNLIKELY(PSMX2_IS_IOV_HEADER(PSMX2_GET_FLAGS(PSMX2_STATUS_TAG(status))) &&
+						 !psmx2_handle_sendv_req(ep, status, 0))) {
+					PSMX2_EP_PUT_OP_CONTEXT(ep, fi_context);
+					PSMX2_FREE_COMPLETION(trx_ctxt, status);
+					continue;
+				}
+				PSMX2_EP_PUT_OP_CONTEXT(ep, fi_context);
+				if (OFI_UNLIKELY(ep->recv_cq && PSMX2_STATUS_ERROR(status))) {
+					op_context = NULL;
+					buf = NULL;
+					flags = psmx2_comp_flags[context_type];
+					if (PSMX2_HAS_IMM(PSMX2_GET_FLAGS(PSMX2_STATUS_TAG(status)))) {
+						flags |= FI_REMOTE_CQ_DATA;
+						data = PSMX2_GET_CQDATA(PSMX2_STATUS_TAG(status));
+					} else {
+						data = 0;
+					}
+					err = psmx2_cq_rx_complete(
+							cq, ep->recv_cq, ep->av,
+							status, op_context, buf, flags, data,
+							event_in, count, &read_count,
+							&read_more, src_addr);
+					if (err) {
+						PSMX2_FREE_COMPLETION(trx_ctxt, status);
+						return err;
+					}
+				}
+				if (ep->recv_cntr)
+					psmx2_cntr_inc(ep->recv_cntr, PSMX2_STATUS_ERROR(status));
+				PSMX2_FREE_COMPLETION(trx_ctxt, status);
+				break;
+
+			case PSMX2_NOCOMP_TRECV_CONTEXT:
+				if (OFI_UNLIKELY(PSMX2_IS_IOV_HEADER(PSMX2_GET_FLAGS(PSMX2_STATUS_TAG(status))) &&
+						 !psmx2_handle_sendv_req(ep, status, 0))) {
+					PSMX2_EP_PUT_OP_CONTEXT(ep, fi_context);
+					PSMX2_FREE_COMPLETION(trx_ctxt, status);
+					continue;
+				}
+				PSMX2_EP_PUT_OP_CONTEXT(ep, fi_context);
+				if (OFI_UNLIKELY(ep->recv_cq && PSMX2_STATUS_ERROR(status))) {
+					op_context = NULL;
+					buf = NULL;
+					flags = psmx2_comp_flags[context_type];
+					err = psmx2_cq_rx_complete(
+							cq, ep->recv_cq, ep->av,
+							status, op_context, buf, flags, 0,
+							event_in, count, &read_count,
+							&read_more, src_addr);
+					if (err) {
+						PSMX2_FREE_COMPLETION(trx_ctxt, status);
+						return err;
+					}
+				}
+				if (ep->recv_cntr)
+					psmx2_cntr_inc(ep->recv_cntr, PSMX2_STATUS_ERROR(status));
+				PSMX2_FREE_COMPLETION(trx_ctxt, status);
+				break;
+
+			case PSMX2_WRITE_CONTEXT:
+				am_req = container_of(fi_context, struct psmx2_am_request,
+						      fi_context);
+				op_context = PSMX2_CTXT_USER(fi_context);
+				free(am_req->tmpbuf);
+				psmx2_am_request_free(trx_ctxt, am_req);
+				if (ep->send_cq) {
+					buf = NULL;
+					flags = psmx2_comp_flags[context_type];
+					err = psmx2_cq_tx_complete(
+							cq, ep->send_cq, ep->av,
+							status, op_context, buf, flags, 0,
+							event_in, count, &read_count,
+							&read_more);
+					if (err) {
+						PSMX2_FREE_COMPLETION(trx_ctxt, status);
+						return err;
+					}
+				}
+				if (ep->write_cntr)
+					psmx2_cntr_inc(ep->write_cntr, PSMX2_STATUS_ERROR(status));
+				PSMX2_FREE_COMPLETION(trx_ctxt, status);
+				break;
+
+			case PSMX2_NOCOMP_WRITE_CONTEXT:
+				am_req = container_of(fi_context, struct psmx2_am_request,
+						      fi_context);
+				op_context = PSMX2_CTXT_USER(fi_context);
+				free(am_req->tmpbuf);
+				psmx2_am_request_free(trx_ctxt, am_req);
+				if (OFI_UNLIKELY(ep->send_cq && PSMX2_STATUS_ERROR(status))) {
+					buf = NULL;
+					flags = psmx2_comp_flags[context_type];
+					err = psmx2_cq_tx_complete(
+							cq, ep->send_cq, ep->av,
+							status, op_context, buf, flags, 0,
+							event_in, count, &read_count,
+							&read_more);
+					if (err) {
+						PSMX2_FREE_COMPLETION(trx_ctxt, status);
+						return err;
+					}
+				}
+				if (ep->write_cntr)
+					psmx2_cntr_inc(ep->write_cntr, PSMX2_STATUS_ERROR(status));
+				PSMX2_FREE_COMPLETION(trx_ctxt, status);
+				break;
+
+			case PSMX2_READ_CONTEXT:
+				am_req = container_of(fi_context, struct psmx2_am_request,
+						      fi_context);
+				if (OFI_UNLIKELY(am_req->op == PSMX2_AM_REQ_READV)) {
+					am_req->read.len_read += PSMX2_STATUS_RCVLEN(status);
+					if (am_req->read.len_read < am_req->read.len) {
+						FI_INFO(&psmx2_prov, FI_LOG_EP_DATA,
+							"readv: long protocol finishes early\n");
+						if (PSMX2_STATUS_ERROR(status))
+							am_req->error = psmx2_errno(PSMX2_STATUS_ERROR(status));
+						/* Request to be freed in AM handler */
+						PSMX2_FREE_COMPLETION(trx_ctxt, status);
+						continue;
+					}
+				}
+				op_context = PSMX2_CTXT_USER(fi_context);
+				free(am_req->tmpbuf);
+				psmx2_am_request_free(trx_ctxt, am_req);
+				if (ep->send_cq) {
+					buf = NULL;
+					flags = psmx2_comp_flags[context_type];
+					err = psmx2_cq_tx_complete(
+							cq, ep->send_cq, ep->av,
+							status, op_context, buf, flags, 0,
+							event_in, count, &read_count,
+							&read_more);
+					if (err) {
+						PSMX2_FREE_COMPLETION(trx_ctxt, status);
+						return err;
+					}
+				}
+				if (ep->read_cntr)
+					psmx2_cntr_inc(ep->read_cntr, PSMX2_STATUS_ERROR(status));
+				PSMX2_FREE_COMPLETION(trx_ctxt, status);
+				break;
+
+			case PSMX2_NOCOMP_READ_CONTEXT:
+				am_req = container_of(fi_context, struct psmx2_am_request,
+						      fi_context);
+				if (OFI_UNLIKELY(am_req->op == PSMX2_AM_REQ_READV)) {
+					am_req->read.len_read += PSMX2_STATUS_RCVLEN(status);
+					if (am_req->read.len_read < am_req->read.len) {
+						FI_INFO(&psmx2_prov, FI_LOG_EP_DATA,
+							"readv: long protocol finishes early\n");
+						if (PSMX2_STATUS_ERROR(status))
+							am_req->error = psmx2_errno(PSMX2_STATUS_ERROR(status));
+						/* Request to be freed in AM handler */
+						PSMX2_FREE_COMPLETION(trx_ctxt, status);
+						continue;
+					}
+				}
+				op_context = PSMX2_CTXT_USER(fi_context);
+				free(am_req->tmpbuf);
+				psmx2_am_request_free(trx_ctxt, am_req);
+				if (OFI_UNLIKELY(ep->send_cq && PSMX2_STATUS_ERROR(status))) {
+					buf = NULL;
+					flags = psmx2_comp_flags[context_type];
+					err = psmx2_cq_tx_complete(
+							cq, ep->send_cq, ep->av,
+							status, op_context, buf, flags, 0,
+							event_in, count, &read_count,
+							&read_more);
+					if (err) {
+						PSMX2_FREE_COMPLETION(trx_ctxt, status);
+						return err;
+					}
+				}
+				if (ep->read_cntr)
+					psmx2_cntr_inc(ep->read_cntr, PSMX2_STATUS_ERROR(status));
+				PSMX2_FREE_COMPLETION(trx_ctxt, status);
+				break;
+
+			case PSMX2_MULTI_RECV_CONTEXT:
+				if (OFI_UNLIKELY(PSMX2_IS_IOV_HEADER(PSMX2_GET_FLAGS(PSMX2_STATUS_TAG(status))) &&
+				    !psmx2_handle_sendv_req(ep, status, 1))) {
+					PSMX2_FREE_COMPLETION(trx_ctxt, status);
+					continue;
+				}
+				multi_recv_req = PSMX2_CTXT_USER(fi_context);
+				if (ep->recv_cq) {
+					op_context = fi_context;
+					buf = multi_recv_req->buf + multi_recv_req->offset;
+					flags = psmx2_comp_flags[context_type];
+					if (PSMX2_HAS_IMM(PSMX2_GET_FLAGS(PSMX2_STATUS_TAG(status)))) {
+						flags |= FI_REMOTE_CQ_DATA;
+						data = PSMX2_GET_CQDATA(PSMX2_STATUS_TAG(status));
+					} else {
+						data = 0;
+					}
+					if (multi_recv_req->offset + PSMX2_STATUS_RCVLEN(status) +
+					    multi_recv_req->min_buf_size > multi_recv_req->len)
+						flags |= FI_MULTI_RECV;	/* buffer used up */
+					err = psmx2_cq_rx_complete(
+							cq, ep->recv_cq, ep->av,
+							status, op_context, buf, flags, data,
+							event_in, count, &read_count,
+							&read_more, src_addr);
+					if (err) {
+						PSMX2_FREE_COMPLETION(trx_ctxt, status);
+						return err;
+					}
+				}
+				if (ep->recv_cntr)
+					psmx2_cntr_inc(ep->recv_cntr, PSMX2_STATUS_ERROR(status));
+
+				/* repost multi-recv buffer */
+				multi_recv_req->offset += PSMX2_STATUS_RCVLEN(status);
+				len_remaining = multi_recv_req->len - multi_recv_req->offset;
+				if (len_remaining >= multi_recv_req->min_buf_size) {
+					if (len_remaining > PSMX2_MAX_MSG_SIZE)
+						len_remaining = PSMX2_MAX_MSG_SIZE;
+					err = psm2_mq_irecv2(ep->rx->psm2_mq,
+							     multi_recv_req->src_addr, &multi_recv_req->tag,
+							     &multi_recv_req->tagsel, multi_recv_req->flag,
+							     multi_recv_req->buf + multi_recv_req->offset,
+							     len_remaining,
+							     (void *)fi_context, &psm2_req);
+					if (err != PSM2_OK) {
+						PSMX2_FREE_COMPLETION(trx_ctxt, status);
+						return psmx2_errno(err);
+					}
+					PSMX2_CTXT_REQ(fi_context) = psm2_req;
+				} else {
+					free(multi_recv_req);
+				}
+				PSMX2_FREE_COMPLETION(trx_ctxt, status);
+				break;
+
+			case PSMX2_REMOTE_WRITE_CONTEXT:
+				am_req = container_of(fi_context, struct psmx2_am_request, fi_context);
+				if (am_req->op & PSMX2_AM_FORCE_ACK) {
+					am_req->error = psmx2_errno(PSMX2_STATUS_ERROR(status));
+					psmx2_am_ack_rma(am_req);
+				}
+
+				if (am_req->ep->recv_cq && (am_req->cq_flags & FI_REMOTE_CQ_DATA)) {
+					op_context = NULL;
+					buf = NULL;
+					flags = psmx2_comp_flags[context_type] | FI_REMOTE_CQ_DATA;
+					err = psmx2_cq_rx_complete(
+							cq, am_req->ep->recv_cq, am_req->ep->av,
+							status, op_context, buf, flags, am_req->write.data,
+							event_in, count, &read_count,
+							&read_more, src_addr);
+					if (err) {
+						psmx2_am_request_free(trx_ctxt, am_req);
+						PSMX2_FREE_COMPLETION(trx_ctxt, status);
+						return err;
+					}
+				}
+
+				if (am_req->ep->caps & FI_RMA_EVENT) {
+					if (am_req->ep->remote_write_cntr)
+						psmx2_cntr_inc(am_req->ep->remote_write_cntr, 0);
+
+					mr = PSMX2_CTXT_USER(fi_context);
+					if (mr->cntr && mr->cntr != am_req->ep->remote_write_cntr)
+						psmx2_cntr_inc(mr->cntr, 0);
+				}
+
+				/* NOTE: am_req->tmpbuf is unused here */
+				psmx2_am_request_free(trx_ctxt, am_req);
+				PSMX2_FREE_COMPLETION(trx_ctxt, status);
+				break;
+
+			case PSMX2_REMOTE_READ_CONTEXT:
+				am_req = container_of(fi_context, struct psmx2_am_request, fi_context);
+				if (am_req->ep->caps & FI_RMA_EVENT) {
+					if (am_req->ep->remote_read_cntr)
+						psmx2_cntr_inc(am_req->ep->remote_read_cntr, 0);
+				}
+
+				/* NOTE: am_req->tmpbuf is unused here */
+				psmx2_am_request_free(trx_ctxt, am_req);
+				PSMX2_FREE_COMPLETION(trx_ctxt, status);
+				break;
+
+			case PSMX2_SENDV_CONTEXT:
+				sendv_req = PSMX2_CTXT_USER(fi_context);
+				sendv_req->iov_done++;
+				if (sendv_req->iov_protocol == PSMX2_IOV_PROTO_MULTI &&
+				    sendv_req->iov_done < sendv_req->iov_info.count + 1) {
+					PSMX2_STATUS_SAVE(status, sendv_req->status);
+					continue;
+				}
+				if (ep->send_cq && !sendv_req->no_completion) {
+					op_context = sendv_req->user_context;
+					buf = NULL;
+					flags = psmx2_comp_flags[context_type] |
+						sendv_req->comp_flag;
+					err = psmx2_cq_tx_complete(
+							cq, ep->send_cq, ep->av,
+							status, op_context, buf, flags, 0,
+							event_in, count, &read_count,
+							&read_more);
+					if (err) {
+						free(sendv_req);
+						PSMX2_FREE_COMPLETION(trx_ctxt, status);
+						return err;
+					}
+				}
+				if (ep->send_cntr)
+					psmx2_cntr_inc(ep->send_cntr, PSMX2_STATUS_ERROR(status));
+				free(sendv_req);
+				PSMX2_FREE_COMPLETION(trx_ctxt, status);
+				break;
+
+			case PSMX2_IOV_SEND_CONTEXT:
+				sendv_req = PSMX2_CTXT_USER(fi_context);
+				sendv_req->iov_done++;
+				PSMX2_FREE_COMPLETION(trx_ctxt, status);
+				if (sendv_req->iov_done < sendv_req->iov_info.count + 1)
+					continue;
+				status = sendv_req->status;
+				if (ep->send_cq && !sendv_req->no_completion) {
+					op_context = sendv_req->user_context;
+					buf = NULL;
+					flags = psmx2_comp_flags[context_type] |
+						sendv_req->comp_flag;
+					err = psmx2_cq_tx_complete(
+							cq, ep->send_cq, ep->av,
+							status, op_context, buf, flags, 0,
+							event_in, count, &read_count,
+							&read_more);
+					if (err) {
+						free(sendv_req);
+						PSMX2_FREE_COMPLETION(trx_ctxt, status);
+						return err;
+					}
+				}
+				if (ep->send_cntr)
+					psmx2_cntr_inc(ep->send_cntr, PSMX2_STATUS_ERROR(status));
+				free(sendv_req);
+				PSMX2_FREE_COMPLETION(trx_ctxt, status);
+				PSMX2_STATUS_INIT(status);
+				break;
+
+			case PSMX2_IOV_RECV_CONTEXT:
+				sendv_rep = PSMX2_CTXT_USER(fi_context);
+				sendv_rep->iov_done++;
+				sendv_rep->msg_length += PSMX2_STATUS_SNDLEN(status);
+				sendv_rep->bytes_received += PSMX2_STATUS_RCVLEN(status);
+				if (PSMX2_STATUS_ERROR(status) != PSM2_OK)
+					sendv_rep->error_code = PSMX2_STATUS_ERROR(status);
+				if (sendv_rep->iov_done < sendv_rep->iov_info.count) {
+					PSMX2_FREE_COMPLETION(trx_ctxt, status);
+					continue;
+				}
+
+				PSMX2_STATUS_TAG(status) = sendv_rep->tag;
+				PSMX2_STATUS_RCVLEN(status) = sendv_rep->bytes_received;
+				PSMX2_STATUS_SNDLEN(status) = sendv_rep->msg_length;
+				PSMX2_STATUS_ERROR(status) = sendv_rep->error_code;
+
+				if (ep->recv_cq && !sendv_rep->no_completion) {
+					op_context = sendv_rep->user_context;
+					buf = sendv_rep->buf;
+					flags = psmx2_comp_flags[context_type] |
+						sendv_rep->comp_flag;
+					err = psmx2_cq_rx_complete(
+							cq, ep->recv_cq, ep->av,
+							status, op_context, buf, flags, 0,
+							event_in, count, &read_count,
+							&read_more, src_addr);
+					if (err) {
+						free(sendv_rep);
+						PSMX2_FREE_COMPLETION(trx_ctxt, status);
+						return err;
+					}
+				}
+				if (ep->recv_cntr)
+					psmx2_cntr_inc(ep->recv_cntr, PSMX2_STATUS_ERROR(status));
+
+				if (sendv_rep->multi_recv) {
+					/* repost the multi-recv buffer */
+					fi_context = sendv_rep->user_context;
+					multi_recv_req = PSMX2_CTXT_USER(fi_context);
+					multi_recv_req->offset += PSMX2_STATUS_RCVLEN(status);
+					len_remaining = multi_recv_req->len - multi_recv_req->offset;
+					if (len_remaining >= multi_recv_req->min_buf_size) {
+						if (len_remaining > PSMX2_MAX_MSG_SIZE)
+							len_remaining = PSMX2_MAX_MSG_SIZE;
+						err = psm2_mq_irecv2(ep->rx->psm2_mq,
+								     multi_recv_req->src_addr, &multi_recv_req->tag,
+								     &multi_recv_req->tagsel, multi_recv_req->flag,
+								     multi_recv_req->buf + multi_recv_req->offset,
+								     len_remaining,
+								     (void *)fi_context, &psm2_req);
+						if (err != PSM2_OK) {
+							free(sendv_rep);
+							PSMX2_FREE_COMPLETION(trx_ctxt, status);
+							return psmx2_errno(err);
+						}
+						PSMX2_CTXT_REQ(fi_context) = psm2_req;
+					} else {
+						free(multi_recv_req);
+					}
+				}
+
+				free(sendv_rep);
+				PSMX2_FREE_COMPLETION(trx_ctxt, status);
+				break;
 			}
+		} else if (err == PSM2_MQ_NO_COMPLETIONS) {
+			return read_count;
+		} else {
+			return psmx2_errno(err);
 		}
-
-		free(sendv_rep);
-		break;
 	}
 
-	return event_saved;
-}
-
-int psmx2_cq_poll_mq(struct psmx2_fid_cq *cq,
-		     struct psmx2_trx_ctxt *trx_ctxt,
-		     struct psmx2_cq_event *event_in,
-		     int count, fi_addr_t *src_addr)
-{
-	struct psmx2_status_data status_data;
-
-	/* psm2_mq_ipeek_dequeue_multi needs non-zero count to make progress */
-	if (!count) {
-		event_in = NULL;
-		count = 1;
-	}
-
-	status_data.poll_cq = cq;
-	status_data.event_buffer = event_in;
-	status_data.src_addr = src_addr;
-	status_data.trx_ctxt = trx_ctxt;
-
-	psm2_mq_ipeek_dequeue_multi(trx_ctxt->psm2_mq, &status_data,
-			psmx2_mq_status_copy, &count);
-	return count;
+	return read_count;
 }
 
 static ssize_t psmx2_cq_readfrom(struct fid_cq *cq, void *buf, size_t count,
@@ -862,16 +976,13 @@ static ssize_t psmx2_cq_readfrom(struct fid_cq *cq, void *buf, size_t count,
 		}
 	}
 
-	if (OFI_UNLIKELY(cq_priv->pending_error != NULL))
+	if (cq_priv->pending_error)
 		return -FI_EAVAIL;
 
 	assert(buf || !count);
 
 	read_count = 0;
 	for (i = 0; i < count; i++) {
-		if (slist_empty(&cq_priv->event_queue))
-			break;
-
 		event = psmx2_cq_dequeue_event(cq_priv);
 		if (event) {
 			if (!event->error) {

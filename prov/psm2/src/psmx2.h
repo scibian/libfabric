@@ -434,12 +434,12 @@ struct psmx2_iov_info {
 struct psmx2_sendv_request {
 	struct fi_context fi_context;
 	struct fi_context fi_context_iov;
+	PSMX2_STATUS_DECL(status);
 	void *user_context;
 	int iov_protocol;
 	int no_completion;
 	int comp_flag;
 	uint32_t iov_done;
-	psm2_mq_tag_t tag;
 	union {
 		struct psmx2_iov_info iov_info;
 		char buf[PSMX2_IOV_BUF_SIZE];
@@ -506,10 +506,8 @@ struct psmx2_trx_ctxt {
 	struct psmx2_fid_domain	*domain;
 	struct psmx2_fid_ep	*ep;
 
-#if !HAVE_PSM2_MQ_FP_MSG
 	/* incoming req queue for AM based RMA request. */
 	struct psmx2_req_queue	rma_queue;
-#endif
 
 	/* triggered operations that are ready to be processed */
 	struct psmx2_req_queue	trigger_queue;
@@ -529,10 +527,6 @@ struct psmx2_trx_ctxt {
 
 	struct dlist_entry	entry;
 };
-
-typedef void (*psmx2_lock_fn_t) (fastlock_t *lock, int lock_level);
-typedef int (*psmx2_trylock_fn_t) (fastlock_t *lock, int lock_level);
-typedef void (*psmx2_unlock_fn_t) (fastlock_t *lock, int lock_level);
 
 struct psmx2_fid_domain {
 	struct util_domain	util_domain;
@@ -560,32 +554,6 @@ struct psmx2_fid_domain {
 	uint32_t		max_atomic_size;
 
 	struct dlist_entry	entry;
-
-	/* Lock/Unlock function pointers set based on FI_THREAD model */
-	psmx2_lock_fn_t av_lock_fn;
-	psmx2_lock_fn_t am_req_pool_lock_fn;
-	psmx2_lock_fn_t trx_ctxt_lock_fn;
-	psmx2_lock_fn_t rma_queue_lock_fn;
-	psmx2_lock_fn_t trigger_queue_lock_fn;
-	psmx2_lock_fn_t peer_lock_fn;
-	psmx2_lock_fn_t sep_lock_fn;
-	psmx2_lock_fn_t trigger_lock_fn;
-	psmx2_lock_fn_t cq_lock_fn;
-	psmx2_lock_fn_t mr_lock_fn;
-	psmx2_lock_fn_t context_lock_fn;
-	psmx2_trylock_fn_t poll_trylock_fn;
-	psmx2_unlock_fn_t av_unlock_fn;
-	psmx2_unlock_fn_t am_req_pool_unlock_fn;
-	psmx2_unlock_fn_t trx_ctxt_unlock_fn;
-	psmx2_unlock_fn_t rma_queue_unlock_fn;
-	psmx2_unlock_fn_t trigger_queue_unlock_fn;
-	psmx2_unlock_fn_t peer_unlock_fn;
-	psmx2_unlock_fn_t sep_unlock_fn;
-	psmx2_unlock_fn_t trigger_unlock_fn;
-	psmx2_unlock_fn_t cq_unlock_fn;
-	psmx2_unlock_fn_t mr_unlock_fn;
-	psmx2_unlock_fn_t context_unlock_fn;
-	psmx2_unlock_fn_t poll_unlock_fn;
 };
 
 #define PSMX2_EP_REGULAR	0
@@ -610,13 +578,6 @@ struct psmx2_ep_name {
 };
 
 #define PSMX2_MAX_STRING_NAME_LEN	64	/* "fi_addr_psmx2://<uint64_t>:<uint64_t>"  */
-
-struct psmx2_status_data {
-	struct psmx2_fid_cq		*poll_cq;
-	struct psmx2_trx_ctxt	*trx_ctxt;
-	fi_addr_t				*src_addr;
-	void					*event_buffer;
-};
 
 struct psmx2_cq_event {
 	union {
@@ -865,33 +826,6 @@ static inline void psmx2_unlock(fastlock_t *lock, int lock_level)
 		fastlock_release(lock);
 }
 
-/* Specialized lock functions used based on FI_THREAD model */
-
-static inline void psmx2_lock_disabled(fastlock_t *lock, int lock_level)
-{
-	return;
-}
-
-static inline int psmx2_trylock_disabled(fastlock_t *lock, int lock_level)
-{
-	return 0;
-}
-
-static inline void psmx2_lock_enabled(fastlock_t *lock, int lock_level)
-{
-	fastlock_acquire(lock);
-}
-
-static inline void psmx2_unlock_enabled(fastlock_t *lock, int lock_level)
-{
-	fastlock_release(lock);
-}
-
-static inline int psmx2_trylock_enabled(fastlock_t *lock, int lock_level)
-{
-	return fastlock_tryacquire(lock);
-}
-
 int	psmx2_init_prov_info(const struct fi_info *hints, struct fi_info **info);
 void	psmx2_update_prov_info(struct fi_info *info,
 			       struct psmx2_ep_name *src_addr,
@@ -1005,7 +939,7 @@ static inline int psmx2_av_check_table_idx(struct psmx2_fid_av *av,
 {
 	int err = 0;
 
-	av->domain->av_lock_fn(&av->lock, 1);
+	psmx2_lock(&av->lock, 1);
 
 	if (OFI_UNLIKELY(idx >= av->last)) {
 		FI_WARN(&psmx2_prov, FI_LOG_AV,
@@ -1024,7 +958,7 @@ static inline int psmx2_av_check_table_idx(struct psmx2_fid_av *av,
 	}
 
 out:
-	av->domain->av_unlock_fn(&av->lock, 1);
+	psmx2_unlock(&av->lock, 1);
 	return err;
 }
 
@@ -1058,9 +992,9 @@ struct psmx2_am_request *psmx2_am_request_alloc(struct psmx2_trx_ctxt *trx_ctxt)
 {
 	struct psmx2_am_request *req;
 
-	trx_ctxt->domain->am_req_pool_lock_fn(&trx_ctxt->am_req_pool_lock, 0);
+	psmx2_lock(&trx_ctxt->am_req_pool_lock, 2);
 	req = util_buf_alloc(trx_ctxt->am_req_pool);
-	trx_ctxt->domain->am_req_pool_unlock_fn(&trx_ctxt->am_req_pool_lock, 0);
+	psmx2_unlock(&trx_ctxt->am_req_pool_lock, 2);
 
 	if (req)
 		memset(req, 0, sizeof(*req));
@@ -1071,9 +1005,9 @@ struct psmx2_am_request *psmx2_am_request_alloc(struct psmx2_trx_ctxt *trx_ctxt)
 static inline void psmx2_am_request_free(struct psmx2_trx_ctxt *trx_ctxt,
 					 struct psmx2_am_request *req)
 {
-	trx_ctxt->domain->am_req_pool_lock_fn(&trx_ctxt->am_req_pool_lock, 0);
+	psmx2_lock(&trx_ctxt->am_req_pool_lock, 2);
 	util_buf_release(trx_ctxt->am_req_pool, req);
-	trx_ctxt->domain->am_req_pool_unlock_fn(&trx_ctxt->am_req_pool_lock, 0);
+	psmx2_unlock(&trx_ctxt->am_req_pool_lock, 2);
 }
 
 struct	psmx2_fid_mr *psmx2_mr_get(struct psmx2_fid_domain *domain, uint64_t key);
@@ -1123,7 +1057,7 @@ static inline void psmx2_get_source_string_name(fi_addr_t source, char *name, si
 static inline void psmx2_progress(struct psmx2_trx_ctxt *trx_ctxt)
 {
 	if (trx_ctxt) {
-		psmx2_cq_poll_mq(NULL, trx_ctxt, NULL, 1, NULL);
+		psmx2_cq_poll_mq(NULL, trx_ctxt, NULL, 0, NULL);
 		if (trx_ctxt->am_progress)
 			psmx2_am_progress(trx_ctxt);
 	}
@@ -1134,12 +1068,12 @@ static inline void psmx2_progress_all(struct psmx2_fid_domain *domain)
 	struct dlist_entry *item;
 	struct psmx2_trx_ctxt *trx_ctxt;
 
-	domain->trx_ctxt_lock_fn(&domain->trx_ctxt_lock, 1);
+	psmx2_lock(&domain->trx_ctxt_lock, 1);
 	dlist_foreach(&domain->trx_ctxt_list, item) {
 		trx_ctxt = container_of(item, struct psmx2_trx_ctxt, entry);
 		psmx2_progress(trx_ctxt);
 	}
-	domain->trx_ctxt_unlock_fn(&domain->trx_ctxt_lock, 1);
+	psmx2_unlock(&domain->trx_ctxt_lock, 1);
 }
 
 /*

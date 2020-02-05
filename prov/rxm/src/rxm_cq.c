@@ -727,8 +727,7 @@ static ssize_t rxm_cq_write_error(struct fid_cq *msg_cq,
 					       err_entry.err_data, NULL, 0));
 		return -FI_EOPBADSTATE;
 	}
-	if (util_cntr)
-		rxm_cntr_incerr(util_cntr);
+	rxm_cntr_incerr(util_cntr);
 	return ofi_cq_write_error(util_cq, &err_entry);
 }
 
@@ -856,20 +855,18 @@ static int rxm_cq_reprocess_recv_queues(struct rxm_ep *rxm_ep)
 {
 	int count = 0;
 
-	if (rxm_ep->rxm_info->caps & FI_DIRECTED_RECV) {
-		fastlock_acquire(&rxm_ep->util_ep.cmap->lock);
+	fastlock_acquire(&rxm_ep->util_ep.cmap->lock);
 
-		if (!rxm_ep->util_ep.cmap->av_updated) {
-			fastlock_release(&rxm_ep->util_ep.cmap->lock);
-			return 0;
-		}
-
-		rxm_ep->util_ep.cmap->av_updated = 0;
+	if (!rxm_ep->util_ep.cmap->av_updated) {
 		fastlock_release(&rxm_ep->util_ep.cmap->lock);
-
-		count += rxm_cq_reprocess_directed_recvs(&rxm_ep->recv_queue);
-		count += rxm_cq_reprocess_directed_recvs(&rxm_ep->trecv_queue);
+		return 0;
 	}
+
+	rxm_ep->util_ep.cmap->av_updated = 0;
+	fastlock_release(&rxm_ep->util_ep.cmap->lock);
+
+	count += rxm_cq_reprocess_directed_recvs(&rxm_ep->recv_queue);
+	count += rxm_cq_reprocess_directed_recvs(&rxm_ep->trecv_queue);
 	return count;
 }
 

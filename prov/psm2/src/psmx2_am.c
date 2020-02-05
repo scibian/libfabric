@@ -71,32 +71,30 @@ int psmx2_am_handler_count = 0;
 int psmx2_am_progress(struct psmx2_trx_ctxt *trx_ctxt)
 {
 	struct slist_entry *item;
+	struct psmx2_am_request *req;
 	struct psmx2_trigger *trigger;
 
-#if !HAVE_PSM2_MQ_FP_MSG
-	struct psmx2_am_request *req;
 	if (psmx2_env.tagged_rma) {
-		trx_ctxt->domain->rma_queue_lock_fn(&trx_ctxt->rma_queue.lock, 2);
+		psmx2_lock(&trx_ctxt->rma_queue.lock, 2);
 		while (!slist_empty(&trx_ctxt->rma_queue.list)) {
 			item = slist_remove_head(&trx_ctxt->rma_queue.list);
 			req = container_of(item, struct psmx2_am_request, list_entry);
-			trx_ctxt->domain->rma_queue_unlock_fn(&trx_ctxt->rma_queue.lock, 2);
+			psmx2_unlock(&trx_ctxt->rma_queue.lock, 2);
 			psmx2_am_process_rma(trx_ctxt, req);
-			trx_ctxt->domain->rma_queue_lock_fn(&trx_ctxt->rma_queue.lock, 2);
+			psmx2_lock(&trx_ctxt->rma_queue.lock, 2);
 		}
-		trx_ctxt->domain->rma_queue_unlock_fn(&trx_ctxt->rma_queue.lock, 2);
+		psmx2_unlock(&trx_ctxt->rma_queue.lock, 2);
 	}
-#endif
 
-	trx_ctxt->domain->trigger_queue_lock_fn(&trx_ctxt->trigger_queue.lock, 2);
+	psmx2_lock(&trx_ctxt->trigger_queue.lock, 2);
 	while (!slist_empty(&trx_ctxt->trigger_queue.list)) {
 		item = slist_remove_head(&trx_ctxt->trigger_queue.list);
 		trigger = container_of(item, struct psmx2_trigger, list_entry);
-		trx_ctxt->domain->trigger_queue_unlock_fn(&trx_ctxt->trigger_queue.lock, 2);
+		psmx2_unlock(&trx_ctxt->trigger_queue.lock, 2);
 		psmx2_process_trigger(trx_ctxt, trigger);
-		trx_ctxt->domain->trigger_queue_lock_fn(&trx_ctxt->trigger_queue.lock, 2);
+		psmx2_lock(&trx_ctxt->trigger_queue.lock, 2);
 	}
-	trx_ctxt->domain->trigger_queue_unlock_fn(&trx_ctxt->trigger_queue.lock, 2);
+	psmx2_unlock(&trx_ctxt->trigger_queue.lock, 2);
 
 	return 0;
 }

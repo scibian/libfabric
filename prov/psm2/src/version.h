@@ -40,6 +40,8 @@
 #ifdef VALGRIND_MAKE_MEM_DEFINED
 #undef VALGRIND_MAKE_MEM_DEFINED
 #endif
+#define PSM_IS_TEST /* keep plain malloc/realloc/calloc/memalign/free/strdup */
+#include "psm2/psm_mq_internal.h"
 #else
 #include <psm2.h>
 #include <psm2_mq.h>
@@ -53,17 +55,70 @@
 #define PSMX2_DEFAULT_UUID	"00FF00FF-0000-0000-0000-00FF00FF00FF"
 #define PROVIDER_INI		PSM2_INI
 
+#if HAVE_PSM2_SRC
+
 #ifndef PSMX2_USE_REQ_CONTEXT
 #define PSMX2_USE_REQ_CONTEXT	1
 #endif
 
-#define PSMX2_STATUS_TYPE	struct psm2_mq_req_user
+#define PSMX2_STATUS_TYPE	struct psm2_mq_req
+#define PSMX2_STATUS_DECL(s)	struct psm2_mq_req *s
+#define PSMX2_STATUS_INIT(s)
+#define PSMX2_STATUS_SAVE(s,t)	do { t = s; } while (0)
 #define PSMX2_STATUS_ERROR(s)	((s)->error_code)
 #define PSMX2_STATUS_TAG(s)	((s)->tag)
 #define PSMX2_STATUS_RCVLEN(s)	((s)->recv_msglen)
 #define PSMX2_STATUS_SNDLEN(s)	((s)->send_msglen)
 #define PSMX2_STATUS_PEER(s)	((s)->peer)
 #define PSMX2_STATUS_CONTEXT(s)	((s)->context)
+
+#define PSMX2_POLL_COMPLETION(trx_ctxt, status, err) \
+	do { \
+		(err) = psm2_mq_ipeek_dequeue((trx_ctxt)->psm2_mq, &(status)); \
+	} while (0)
+
+#define PSMX2_FREE_COMPLETION(trx_ctxt, status) \
+	psm2_mq_req_free((trx_ctxt)->psm2_mq, status)
+
+#else /* !HAVE_PSM2_SRC */
+
+#ifdef PSMX2_USE_REQ_CONTEXT
+#undef PSMX2_USE_REQ_CONTEXT
+#endif
+#define PSMX2_USE_REQ_CONTEXT	0
+
+#define PSMX2_STATUS_TYPE	psm2_mq_status2_t
+#define PSMX2_STATUS_DECL(s)	psm2_mq_status2_t s##_priv, *s
+#define PSMX2_STATUS_INIT(s)	do { s = &s##_priv; } while (0)
+#define PSMX2_STATUS_SAVE(s,t)	do { *(t) = *(s); } while (0)
+#define PSMX2_STATUS_ERROR(s)	((s)->error_code)
+#define PSMX2_STATUS_TAG(s)	((s)->msg_tag)
+#define PSMX2_STATUS_RCVLEN(s)	((s)->nbytes)
+#define PSMX2_STATUS_SNDLEN(s)	((s)->msg_length)
+#define PSMX2_STATUS_PEER(s)	((s)->msg_peer)
+#define PSMX2_STATUS_CONTEXT(s)	((s)->context)
+
+/*
+ * psm2_mq_test2 is called immediately after psm2_mq_ipeek with a lock held to
+ * prevent psm2_mq_ipeek from returning the same request multiple times under
+ * different threads.
+ */
+#define PSMX2_POLL_COMPLETION(trx_ctxt, status, err) \
+	do { \
+		if (psmx2_trylock(&(trx_ctxt)->poll_lock, 2)) { \
+			(err) = PSM2_MQ_NO_COMPLETIONS; \
+		} else { \
+			psm2_mq_req_t psm2_req; \
+			(err) = psm2_mq_ipeek((trx_ctxt)->psm2_mq, &psm2_req, NULL); \
+			if ((err) == PSM2_OK) \
+				psm2_mq_test2(&psm2_req, (status)); \
+			psmx2_unlock(&(trx_ctxt)->poll_lock, 2); \
+		} \
+	} while(0)
+
+#define PSMX2_FREE_COMPLETION(trx_ctxt, status)
+
+#endif /* HAVE_PSM2_SRC */
 
 /*
  * Provide backward compatibility for older PSM2 libraries that lack the
@@ -111,7 +166,7 @@ psm2_error_t psm2_am_register_handlers_2(
 #endif /* !HAVE_PSM2_AM_REGISTER_HANDLERS_2 */
 
 /*
- * Use reserved space within psm2_mq_req_user for fi_context instead of
+ * Use reserved space within psm2_mq_req for fi_context instead of
  * allocating from a internal queue.
  *
  * Only work when compiled with PSM2 source. Can be turned off by
@@ -184,15 +239,15 @@ struct psmx2_context {
 #define PSMX2_EP_GET_OP_CONTEXT(ep, ctx) \
 	do { \
 		struct psmx2_context *context; \
-		ep->domain->context_lock_fn(&(ep)->context_lock, 2); \
+		psmx2_lock(&(ep)->context_lock, 2); \
 		if (!slist_empty(&(ep)->free_context_list)) { \
 			context = container_of(slist_remove_head(&(ep)->free_context_list), \
 					       struct psmx2_context, list_entry); \
-			ep->domain->context_unlock_fn(&(ep)->context_lock, 2); \
+			psmx2_unlock(&(ep)->context_lock, 2); \
 			(ctx) = &context->fi_context; \
 			break; \
 		} \
-		ep->domain->context_unlock_fn(&(ep)->context_lock, 2); \
+		psmx2_unlock(&(ep)->context_lock, 2); \
 		context = malloc(sizeof(*context)); \
 		if (!context) { \
 			FI_WARN(&psmx2_prov, FI_LOG_EP_DATA, "out of memory.\n"); \
@@ -206,9 +261,9 @@ struct psmx2_context {
 		struct psmx2_context *context; \
 		context = container_of((ctx), struct psmx2_context, fi_context); \
 		context->list_entry.next = NULL; \
-		ep->domain->context_lock_fn(&(ep)->context_lock, 2); \
+		psmx2_lock(&(ep)->context_lock, 2); \
 		slist_insert_tail(&context->list_entry, &(ep)->free_context_list); \
-		ep->domain->context_unlock_fn(&(ep)->context_lock, 2); \
+		psmx2_unlock(&(ep)->context_lock, 2); \
 	} while (0)
 
 #endif /* PSMX2_USE_REQ_CONTEXT */
