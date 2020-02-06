@@ -1,10 +1,7 @@
 Source: libfabric
 Section: libs
 Priority: optional
-Maintainer: Debian HPC Team <debian-hpc@lists.debian.org>
-Uploaders: Roland Fehrenbacher <rfehren@debian.org>,
-           Mehdi Dogguy <mehdi@debian.org>,
-           Benjamin Drung <bdrung@debian.org>,
+Maintainer: Scibian Project <packaging@scibian.org>
 Build-Depends: debhelper (>= 10),
                dpkg-dev (>= 1.13.19),
                libibverbs-dev,
@@ -13,8 +10,8 @@ Build-Depends: debhelper (>= 10),
                librdmacm-dev,
 Standards-Version: 4.3.0
 Homepage: https://ofiwg.github.io/libfabric/
-Vcs-Git: https://salsa.debian.org/hpc-team/libfabric.git
-Vcs-Browser: https://salsa.debian.org/hpc-team/libfabric
+Vcs-Git: https://github.com/scibian/libfabric.git
+Vcs-Browser: https://github.com/scibian/libfabric.git
 
 Package: libfabric-bin
 Architecture: linux-any
