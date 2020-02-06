@@ -1,3 +1,10 @@
+libfabric (1.6.2-3sci10+opa10.9u1) scibian10+opa10.9; urgency=medium
+
+  * New upstream release
+  * Scibianization
+
+ -- MHamed Bouaziz <mhamed-externe.bouaziz@edf.fr>  Thu, 06 Feb 2020 10:13:11 +0100
+
 libfabric (1.6.2-3) unstable; urgency=medium
 
   * Add patch to detect the presence of OmniPath adapters in the psm2
