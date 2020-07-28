@@ -1,3 +1,9 @@
+libfabric (1.4.0-1sci9+opa10.10u1) scibian9+opa10.10; urgency=medium
+
+  * New release for opa10.10
+
+ -- MHamed Bouaziz <mhamed-externe.bouaziz@edf.fr>  Tue, 28 Jul 2020 10:40:47 +0200
+
 libfabric (1.4.0-1sci9+opa10.9u1) scibian9+opa10.9; urgency=medium
 
   * New release for opa10.9
