@@ -1,3 +1,9 @@
+libfabric (1.4.0-1sci9+opa10.10u2) scibian9+opa10.10; urgency=medium
+
+  * New release to rebuild against new version of opa10.10
+
+ -- Rémi Palancher <remi-externe.palancher@edf.fr>  Wed, 21 Apr 2021 22:26:49 +0200
+
 libfabric (1.4.0-1sci9+opa10.10u1) scibian9+opa10.10; urgency=medium
 
   * New release for opa10.10
